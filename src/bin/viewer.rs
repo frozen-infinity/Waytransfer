@@ -1,6 +1,6 @@
 use minifb::{MouseButton, MouseMode, Window, WindowOptions};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     error::Error,
     net::{Shutdown, TcpStream},
     sync::mpsc,
@@ -8,6 +8,23 @@ use std::{
     time::{Duration, Instant},
 };
 use waytransfer::*;
+struct NativeWindow {
+    window: Window,
+    resize: viewer_input::ResizeTracker,
+    pointer: Option<(u16, u16, bool)>,
+    keys: Vec<u16>,
+    buttons: (bool, bool),
+}
+fn scoped(multi: bool, id: u32, message: Message) -> Message {
+    if multi {
+        Message::ForWindow {
+            id,
+            message: Box::new(message),
+        }
+    } else {
+        message
+    }
+}
 fn main() -> Result<(), Box<dyn Error>> {
     let headless = std::env::args().any(|arg| arg == "--headless");
     let addr = std::env::args()
@@ -33,13 +50,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         if decoder.pixels != demo_frame(40, 40, true) {
             return Err("reconstruction differs".into());
         }
-        println!("TCP handshake, initial frame, pointer input and delta reconstruction passed");
+        println!("Demo headless round trip passed");
         return Ok(());
     }
-    let mut decoder = Decoder::default();
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    decoder.apply(read_message(&mut stream)?)?;
-    stream.set_read_timeout(None)?;
     let mut reader = stream.try_clone()?;
     let (tx, rx) = mpsc::sync_channel(2);
     thread::spawn(move || loop {
@@ -49,18 +62,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             break;
         }
     });
-    // Native macOS window creation stays on the main thread.
-    let mut window = Window::new(
-        "Waytransfer — close window to disconnect",
-        decoder.size.width as usize,
-        decoder.size.height as usize,
-        WindowOptions {
-            resize: true,
-            ..WindowOptions::default()
-        },
-    )?;
-    window.set_target_fps(60);
-    // Input writes use a bounded queue so a slow network cannot freeze the UI.
     let mut writer = stream.try_clone()?;
     let (input_tx, input_rx) = mpsc::sync_channel(128);
     thread::spawn(move || {
@@ -70,78 +71,174 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     });
-    let mut resize =
-        viewer_input::ResizeTracker::new(window.get_size(), decoder.size, Instant::now());
-    let mut previous = None;
-    let mut keys = Vec::new();
-    let mut buttons = (false, false);
-    let mut active = None;
+    let mut scene = client_scene::ClientScene::default();
+    let mut native: BTreeMap<u32, NativeWindow> = BTreeMap::new();
     let mut pending = VecDeque::new();
-    while window.is_open() {
-        match rx.try_recv() {
-            Ok(message) => decoder.apply(message?)?,
-            Err(mpsc::TryRecvError::Disconnected) => return Err("sender disconnected".into()),
-            Err(mpsc::TryRecvError::Empty) => {}
+    let mut focused = None;
+    println!("Connected; waiting for application windows. Ctrl-C ends the viewer.");
+    loop {
+        let tick = Instant::now();
+        for _ in 0..32 {
+            match rx.try_recv() {
+                Ok(message) => {
+                    scene.apply(message?)?;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return Err("sender disconnected".into()),
+                Err(mpsc::TryRecvError::Empty) => break,
+            }
         }
-        if let Some(size) = resize.observe(window.get_size(), Instant::now()) {
-            // There may be an older request queued but not yet written.
-            pending.retain(|message| !matches!(message, Message::Resize { .. }));
-            pending.push_back(Message::Resize { size });
+        let gone: Vec<_> = native
+            .keys()
+            .filter(|id| !scene.windows.contains_key(id))
+            .copied()
+            .collect();
+        for id in gone {
+            native.remove(&id);
         }
-        let focused = viewer_input::window_focused(&window);
-        if active != Some(focused) {
-            pending.push_back(Message::Focus { active: focused });
-            active = Some(focused);
-            previous = None;
-            keys.clear();
-            buttons = (false, false);
-        }
-        if focused {
-            if let Some((x, y)) = window.get_unscaled_mouse_pos(MouseMode::Clamp) {
-                let (x, y) = viewer_input::map_pointer(x, y, window.get_size(), decoder.size);
-                let state = (x, y, window.get_mouse_down(MouseButton::Left));
-                if previous != Some(state) {
-                    // Coalesce motion only; preserve every observed button transition.
-                    if matches!(pending.back(), Some(Message::Pointer { pressed, .. }) if *pressed == state.2)
-                    {
-                        pending.pop_back();
-                    }
-                    pending.push_back(Message::Pointer {
-                        x: state.0,
-                        y: state.1,
-                        pressed: state.2,
+        for (&id, surface) in &scene.windows {
+            if surface.ready {
+                if let std::collections::btree_map::Entry::Vacant(entry) = native.entry(id) {
+                    let mut window = Window::new(
+                        &surface.title,
+                        surface.decoder.size.width as usize,
+                        surface.decoder.size.height as usize,
+                        WindowOptions {
+                            resize: true,
+                            ..Default::default()
+                        },
+                    )?;
+                    // Pump all windows once per shared tick; no per-window frame limiter.
+                    window.set_target_fps(0);
+                    let resize = viewer_input::ResizeTracker::new(
+                        window.get_size(),
+                        surface.decoder.size,
+                        Instant::now(),
+                    );
+                    entry.insert(NativeWindow {
+                        window,
+                        resize,
+                        pointer: None,
+                        keys: Vec::new(),
+                        buttons: (false, false),
                     });
-                    previous = Some(state);
+                }
+                let client = native.get_mut(&id).unwrap();
+                client.window.set_title(&surface.title);
+                if client.window.is_open() {
+                    client.window.update_with_buffer(
+                        &surface.decoder.pixels,
+                        surface.decoder.size.width as usize,
+                        surface.decoder.size.height as usize,
+                    )?;
                 }
             }
-            let next_buttons = (
-                window.get_mouse_down(MouseButton::Right),
-                window.get_mouse_down(MouseButton::Middle),
-            );
-            if buttons != next_buttons {
-                pending.push_back(Message::Buttons {
-                    right: next_buttons.0,
-                    middle: next_buttons.1,
-                });
-                buttons = next_buttons;
+        }
+        for (&id, client) in &native {
+            let parent = scene.windows[&id]
+                .parent
+                .and_then(|parent| native.get(&parent))
+                .map(|parent| &parent.window);
+            viewer_input::attach_parent(&client.window, parent);
+        }
+        let closed: Vec<_> = native
+            .iter()
+            .filter(|(_, client)| !client.window.is_open())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in closed {
+            pending.push_back(scoped(scene.multi, id, Message::Close));
+            native.remove(&id);
+            scene.close_locally(id);
+        }
+        if !scene.multi && !scene.closing.is_empty() && native.is_empty() {
+            stream.shutdown(Shutdown::Both)?;
+            return Ok(());
+        }
+        let next_focus = native
+            .iter()
+            .find(|(_, client)| viewer_input::window_focused(&client.window))
+            .map(|(id, _)| *id);
+        if next_focus != focused {
+            if let Some(id) = focused {
+                pending.push_back(scoped(scene.multi, id, Message::Focus { active: false }));
             }
-            let mut next_keys: Vec<_> = window
+            if let Some(id) = next_focus {
+                pending.push_back(scoped(scene.multi, id, Message::Focus { active: true }));
+                let client = native.get_mut(&id).unwrap();
+                client.pointer = None;
+                client.keys.clear();
+                client.buttons = (false, false);
+            }
+            focused = next_focus;
+        }
+        for (&id, client) in &mut native {
+            if let Some(size) = client
+                .resize
+                .observe(client.window.get_size(), Instant::now())
+            {
+                pending.retain(|message|!matches!(message,Message::ForWindow {id:other,message} if *other==id && matches!(message.as_ref(),Message::Resize {..})));
+                pending.push_back(scoped(scene.multi, id, Message::Resize { size }));
+            }
+            if focused != Some(id) {
+                continue;
+            }
+            let decoder = &scene.windows[&id].decoder;
+            if let Some((x, y)) = client.window.get_unscaled_mouse_pos(MouseMode::Clamp) {
+                let (x, y) =
+                    viewer_input::map_pointer(x, y, client.window.get_size(), decoder.size);
+                let state = (x, y, client.window.get_mouse_down(MouseButton::Left));
+                if client.pointer != Some(state) {
+                    pending.push_back(scoped(
+                        scene.multi,
+                        id,
+                        Message::Pointer {
+                            x,
+                            y,
+                            pressed: state.2,
+                        },
+                    ));
+                    client.pointer = Some(state);
+                }
+            }
+            let buttons = (
+                client.window.get_mouse_down(MouseButton::Right),
+                client.window.get_mouse_down(MouseButton::Middle),
+            );
+            if buttons != client.buttons {
+                pending.push_back(scoped(
+                    scene.multi,
+                    id,
+                    Message::Buttons {
+                        right: buttons.0,
+                        middle: buttons.1,
+                    },
+                ));
+                client.buttons = buttons;
+            }
+            let mut keys: Vec<_> = client
+                .window
                 .get_keys()
                 .into_iter()
                 .filter_map(viewer_input::evdev)
                 .collect();
-            next_keys.sort_unstable();
-            if keys != next_keys {
-                pending.push_back(Message::Keys {
-                    held: next_keys.clone(),
-                });
-                keys = next_keys;
+            keys.sort_unstable();
+            if keys != client.keys {
+                pending.push_back(scoped(
+                    scene.multi,
+                    id,
+                    Message::Keys { held: keys.clone() },
+                ));
+                client.keys = keys;
             }
-            if let Some((x, y)) = window.get_scroll_wheel() {
-                pending.push_back(Message::Scroll {
-                    horizontal: (-x * 15.0) as i16,
-                    vertical: (-y * 15.0) as i16,
-                });
+            if let Some((x, y)) = client.window.get_scroll_wheel() {
+                pending.push_back(scoped(
+                    scene.multi,
+                    id,
+                    Message::Scroll {
+                        horizontal: (-x * 15.0) as i16,
+                        vertical: (-y * 15.0) as i16,
+                    },
+                ));
             }
         }
         while let Some(message) = pending.pop_front() {
@@ -151,20 +248,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     pending.push_front(message);
                     break;
                 }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    return Err("input transport disconnected".into())
-                }
+                Err(_) => return Err("input transport disconnected".into()),
             }
         }
         if pending.len() > 256 {
             return Err("Input backlog exceeded limit; reconnect when network recovers".into());
         }
-        window.update_with_buffer(
-            &decoder.pixels,
-            decoder.size.width as usize,
-            decoder.size.height as usize,
-        )?;
+        thread::sleep(Duration::from_millis(16).saturating_sub(tick.elapsed()));
     }
-    stream.shutdown(Shutdown::Both)?;
-    Ok(())
 }

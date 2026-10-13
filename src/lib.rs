@@ -1,7 +1,7 @@
 //! Versioned, bounded transport and lossless dirty-tile reconstruction.
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 pub const WIDTH: usize = 640;
 pub const HEIGHT: usize = 400;
 pub const TILE: usize = 32;
@@ -11,9 +11,33 @@ fn invalid(s: &str) -> io::Error {
 }
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum Message {
-    Hello { version: u16 },
-    Frame { sequence: u64, tiles: Vec<Tile> },
-    Pointer { x: u16, y: u16, pressed: bool },
+    Hello {
+        version: u16,
+    },
+    Frame {
+        sequence: u64,
+        tiles: Vec<Tile>,
+    },
+    Pointer {
+        x: u16,
+        y: u16,
+        pressed: bool,
+    },
+    /// Full held-key snapshot. Evdev codes (not XKB codes); US layout initially.
+    Keys {
+        held: Vec<u16>,
+    },
+    Buttons {
+        right: bool,
+        middle: bool,
+    },
+    Scroll {
+        horizontal: i16,
+        vertical: i16,
+    },
+    Focus {
+        active: bool,
+    },
 }
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Tile {
@@ -174,3 +198,9 @@ pub fn demo_frame(x: usize, y: usize, pressed: bool) -> Vec<u32> {
     }
     pixels
 }
+
+#[cfg(all(target_os = "linux", feature = "compositor"))]
+pub mod compositor;
+pub mod remote;
+#[cfg(feature = "viewer")]
+pub mod viewer_input;

@@ -366,8 +366,10 @@ impl SingleWindow {
         )?;
         let bytes = renderer.map_texture(&mapping)?;
         let pixels = bytes
-            .chunks_exact(4)
-            .map(|p| u32::from_ne_bytes(p.try_into().unwrap()) & 0xffffff)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| u32::from_ne_bytes(*p) & 0xffffff)
             .collect();
         if let Some(window) = &self.window {
             window.with_surfaces(|_, states| {

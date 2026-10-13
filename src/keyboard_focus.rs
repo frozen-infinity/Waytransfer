@@ -63,16 +63,16 @@ impl KeyboardTarget<SingleWindow> for KeyboardFocus {
         serial: Serial,
     ) {
         match self {
-            Self::Wayland(surface) => surface.enter(seat, state, keys, serial),
+            Self::Wayland(surface) => KeyboardTarget::enter(surface, seat, state, keys, serial),
             #[cfg(feature = "x11")]
-            Self::X11(surface) => surface.enter(seat, state, keys, serial),
+            Self::X11(surface) => KeyboardTarget::enter(surface, seat, state, keys, serial),
         }
     }
     fn leave(&self, seat: &Seat<SingleWindow>, state: &mut SingleWindow, serial: Serial) {
         match self {
-            Self::Wayland(surface) => surface.leave(seat, state, serial),
+            Self::Wayland(surface) => KeyboardTarget::leave(surface, seat, state, serial),
             #[cfg(feature = "x11")]
-            Self::X11(surface) => surface.leave(seat, state, serial),
+            Self::X11(surface) => KeyboardTarget::leave(surface, seat, state, serial),
         }
     }
     fn key(

@@ -1329,6 +1329,7 @@ checksum = "6e9567599ef23e09b8dad6e429e5738d4509dfc46b3b21f32841a304d16b29c8"
 dependencies = [
  "bitflags 2.13.2",
  "wayland-backend",
+ "wayland-client",
  "wayland-protocols",
  "wayland-scanner",
  "wayland-server",
@@ -1342,6 +1343,7 @@ checksum = "eb04e52f7836d7c7976c78ca0250d61e33873c34156a2a1fc9474828ec268234"
 dependencies = [
  "bitflags 2.13.2",
  "wayland-backend",
+ "wayland-client",
  "wayland-protocols",
  "wayland-scanner",
  "wayland-server",
@@ -1391,12 +1393,17 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "ctrlc",
+ "libc",
  "lz4_flex",
+ "memmap2",
  "minifb",
  "smithay",
  "tempfile",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
+ "xkbcommon",
 ]
 
 [[package]]

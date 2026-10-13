@@ -10,6 +10,7 @@ default = []
 viewer = ["dep:minifb"]
 compositor = ["dep:smithay", "dep:ctrlc"]
 x11 = ["compositor", "smithay/xwayland"]
+desktop = ["dep:libc","dep:wayland-client", "dep:wayland-protocols-wlr", "dep:wayland-protocols-misc", "dep:tempfile", "dep:memmap2", "dep:xkbcommon", "dep:ctrlc"]
 gpu = ["compositor", "smithay/renderer_gl", "smithay/use_system_lib"]
 
 [dependencies]
@@ -21,6 +22,13 @@ name = "viewer"
 required-features = ["viewer"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+wayland-protocols-misc = { version = "0.3", features = ["client"], optional = true }
+libc = { version = "0.2", optional = true }
+memmap2 = { version = "0.9", optional = true }
+tempfile = { version = "3", optional = true }
+xkbcommon = { version = "0.8", optional = true }
 ctrlc = { version = "3", optional = true }
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "desktop", "renderer_pixman"], optional = true }
 
@@ -35,3 +43,7 @@ tempfile = "3"
 
 [build-dependencies]
 cc = "1"
+
+[[bin]]
+name = "desktop"
+required-features = ["desktop"]

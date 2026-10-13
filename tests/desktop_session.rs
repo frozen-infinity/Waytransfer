@@ -18,7 +18,11 @@ impl Drop for ChildGuard {
 fn read_scene(viewer: &mut TcpStream, scene: &mut ClientScene, log: &std::path::Path) {
     scene
         .apply(read_message(viewer).unwrap_or_else(|error| {
-            panic!("{error}; {}", fs::read_to_string(log).unwrap_or_default())
+            panic!(
+                "{error}; {}; {}",
+                fs::read_to_string(log).unwrap_or_default(),
+                sway_state(log.parent().unwrap())
+            )
         }))
         .unwrap();
 }
@@ -184,12 +188,7 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
     keys(&mut viewer, vec![125, 28]);
     keys(&mut viewer, vec![]);
     let deadline = Instant::now() + Duration::from_secs(15);
-    while scene.windows[&1]
-        .decoder
-        .pixels
-        .iter()
-        .all(|pixel| *pixel == 0x112233)
-    {
+    while background_fraction(&scene) > 0.9 {
         assert!(
             Instant::now() < deadline,
             "compositor shortcut did not launch terminal"
@@ -238,23 +237,13 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
     eprintln!("desktop phase: workspace 2");
     keys(&mut viewer, vec![125, 3]);
     keys(&mut viewer, vec![]);
-    while scene.windows[&1]
-        .decoder
-        .pixels
-        .iter()
-        .any(|pixel| *pixel != 0x112233)
-    {
+    while background_fraction(&scene) < 0.9 {
         read_scene(&mut viewer, &mut scene, &log);
     }
     eprintln!("desktop phase: workspace 1");
     keys(&mut viewer, vec![125, 2]);
     keys(&mut viewer, vec![]);
-    while scene.windows[&1]
-        .decoder
-        .pixels
-        .iter()
-        .all(|pixel| *pixel == 0x112233)
-    {
+    while background_fraction(&scene) > 0.9 {
         read_scene(&mut viewer, &mut scene, &log);
     }
     send(
@@ -311,4 +300,11 @@ fn sway_state(runtime: &std::path::Path) -> String {
         })
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+// A software cursor may be present even without requesting cursor overlay. Require
+// the wallpaper to dominate an empty workspace, not every individual pixel.
+fn background_fraction(scene: &ClientScene) -> f64 {
+    let pixels = &scene.windows[&1].decoder.pixels;
+    pixels.iter().filter(|pixel| **pixel == 0x112233).count() as f64 / pixels.len() as f64
 }

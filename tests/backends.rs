@@ -331,8 +331,10 @@ fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
         {
             assert!(
                 Instant::now() < deadline,
-                "Java input for {marker} failed: {}",
-                session.log()
+                "Java input for {marker} failed: {}; key={:?}, text={:?}",
+                session.log(),
+                fs::read_to_string(session.runtime.path().join(marker)),
+                fs::read_to_string(session.runtime.path().join(format!("{marker}-text")))
             );
             thread::sleep(Duration::from_millis(20));
         }

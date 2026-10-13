@@ -22,6 +22,7 @@ public final class WaytransferSwingProbe {
         });
         input.addKeyListener(new KeyAdapter() {
             @Override public void keyPressed(KeyEvent event) {
+                System.out.println(marker + " key " + event.getKeyCode() + " char " + (int)event.getKeyChar());
                 if (event.getKeyCode() == KeyEvent.VK_A || event.getKeyCode() == KeyEvent.VK_B) {
                     try { Files.writeString(Path.of(marker), event.getKeyChar() + ""); }
                     catch (Exception error) { throw new RuntimeException(error); }
@@ -48,6 +49,7 @@ public final class WaytransferSwingProbe {
         SwingUtilities.invokeAndWait(() -> {
             JFrame main = new JFrame("Waytransfer Java main");
             main.setUndecorated(true);
+            main.setBackground(Color.RED);
             main.addComponentListener(new ComponentAdapter() {
                 @Override public void componentResized(ComponentEvent event) {
                     try { Files.writeString(Path.of("main-size"), main.getWidth() + "x" + main.getHeight()); }
@@ -61,6 +63,7 @@ public final class WaytransferSwingProbe {
             System.out.println("Main shown");
             JDialog dialog = new JDialog(main, "Waytransfer Java dialog", false);
             dialog.setUndecorated(true);
+            dialog.setBackground(Color.BLUE);
             dialog.setContentPane(content("dialog-key", Color.BLUE));
             dialog.setSize(320, 220);
             dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);

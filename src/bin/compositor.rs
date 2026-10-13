@@ -36,12 +36,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut size = Dimensions::default();
     let mut accelerated = false;
     let mut use_x11 = false;
+    let mut app_backend = "auto".to_string();
     let mut command = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--gpu" => accelerated = true,
             "--x11" => use_x11 = true,
+            "--app-backend" => {
+                app_backend = args
+                    .next()
+                    .ok_or("--app-backend needs auto, wayland or x11")?;
+                if !matches!(app_backend.as_str(), "auto" | "wayland" | "x11") {
+                    return Err("--app-backend needs auto, wayland or x11".into());
+                }
+            }
             "--listen" => address = args.next().ok_or("--listen needs an address")?,
             "--size" => size = args.next().ok_or("--size needs WIDTHxHEIGHT")?.parse()?,
             "--socket" => socket_name = args.next().ok_or("--socket needs a name")?,
@@ -50,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             "--help" | "-h" => {
-                println!("compositor [--listen 127.0.0.1:7878] [--socket waytransfer-0] [--size 640x400] [-- PROGRAM ARGS...]\nHeadless multiwindow session. Optional --gpu and --x11 require matching build features.");
+                println!("compositor [--listen 127.0.0.1:7878] [--socket waytransfer-0] [--size 640x400] [--app-backend auto|wayland|x11] [-- PROGRAM ARGS...]\nHeadless multiwindow session. Optional --gpu and --x11 require matching build features.\n--app-backend x11 requires --x11 and selects GTK/Qt/Java X11 for the launched application.");
                 return Ok(());
             }
             _ => {
@@ -62,6 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if socket_name.contains('/') || socket_name.is_empty() {
         return Err("socket name must be a simple filename".into());
+    }
+    if app_backend == "x11" && !use_x11 {
+        return Err("--app-backend x11 requires --x11".into());
     }
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .ok_or("XDG_RUNTIME_DIR is unset; run inside your Linux user session")?;
@@ -125,6 +137,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         launch
             .args(&command[1..])
             .env("WAYLAND_DISPLAY", &socket_name)
+            // An inherited fd could connect the child to the user's desktop instead.
+            .env_remove("WAYLAND_SOCKET")
             .env("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1");
         if !accelerated {
             launch
@@ -134,12 +148,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(feature = "x11")]
         if let Some(number) = state.x11_display {
-            launch.env("DISPLAY", format!(":{number}"));
+            launch
+                .env("DISPLAY", format!(":{number}"))
+                .env_remove("XAUTHORITY");
         } else {
             launch.env_remove("DISPLAY");
         }
         #[cfg(not(feature = "x11"))]
         launch.env_remove("DISPLAY");
+        match app_backend.as_str() {
+            "wayland" => {
+                launch
+                    .env_remove("DISPLAY")
+                    .env("GDK_BACKEND", "wayland")
+                    .env("QT_QPA_PLATFORM", "wayland");
+            }
+            "x11" => {
+                // Unsetting WAYLAND_DISPLAY alone lets some runtimes probe the
+                // default wayland-0 socket, potentially reaching the existing desktop.
+                launch
+                    .env(
+                        "WAYLAND_DISPLAY",
+                        std::path::Path::new(&runtime).join("waytransfer-x11-only-no-socket"),
+                    )
+                    .env("GDK_BACKEND", "x11")
+                    .env("QT_QPA_PLATFORM", "xcb");
+                let mut options = std::env::var("JDK_JAVA_OPTIONS").unwrap_or_default();
+                options.push_str(" -Dawt.toolkit.name=XToolkit");
+                launch.env("JDK_JAVA_OPTIONS", options);
+            }
+            _ => {}
+        }
+        println!("Launching {} (application backend: {app_backend})", program);
         Some(launch.spawn()?)
     } else {
         None

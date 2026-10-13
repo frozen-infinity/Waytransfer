@@ -18,7 +18,13 @@ use wayland_client::{
     },
     Connection, Dispatch, QueueHandle, WEnum,
 };
-use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols::{
+    wp::{
+        fractional_scale::v1::client::{wp_fractional_scale_manager_v1, wp_fractional_scale_v1},
+        viewporter::client::{wp_viewport, wp_viewporter},
+    },
+    xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base},
+};
 use waytransfer::{
     compositor::SingleWindow,
     remote::{RemoteEvent, RemoteServer},
@@ -30,6 +36,8 @@ struct App {
     title: String,
     color: u32,
     closed: bool,
+    viewported: bool,
+    viewport: Option<wp_viewport::WpViewport>,
     size: Dimensions,
     surface: Option<wl_surface::WlSurface>,
     shm: Option<wl_shm::WlShm>,
@@ -47,6 +55,9 @@ impl App {
         self.events.as_ref().unwrap().send(event).unwrap();
     }
     fn init(&mut self, qh: &QueueHandle<Self>) {
+        if self.viewported && self.viewport.is_none() {
+            return;
+        }
         if self.xdg.is_none() {
             if let (Some(shell), Some(surface)) = (&self.shell, &self.surface) {
                 let xdg = shell.get_xdg_surface(surface, qh, ());
@@ -93,22 +104,35 @@ impl App {
         if let (Some(shm), Some(surface)) = (&self.shm, &self.surface) {
             // A fresh buffer each commit: never mutate a buffer still owned by the compositor.
             let mut file = tempfile::tempfile().unwrap();
-            for pixel in self.pixels() {
-                file.write_all(&(pixel | 0xff000000).to_ne_bytes()).unwrap();
+            let factor = if self.viewported { 2 } else { 1 };
+            let pixels = self.pixels();
+            for y in 0..height * factor {
+                for x in 0..width * factor {
+                    let pixel = pixels[(y / factor) * width + x / factor];
+                    file.write_all(&(pixel | 0xff000000).to_ne_bytes()).unwrap();
+                }
             }
-            let pool = shm.create_pool(file.as_fd(), (width * height * 4) as i32, qh, ());
+            if let Some(viewport) = &self.viewport {
+                viewport.set_destination(width as i32, height as i32);
+            }
+            let pool = shm.create_pool(
+                file.as_fd(),
+                (width * height * factor * factor * 4) as i32,
+                qh,
+                (),
+            );
             let buffer = pool.create_buffer(
                 0,
-                width as i32,
-                height as i32,
-                (width * 4) as i32,
+                (width * factor) as i32,
+                (height * factor) as i32,
+                (width * factor * 4) as i32,
                 wl_shm::Format::Argb8888,
                 qh,
                 (),
             );
             pool.destroy();
             surface.attach(Some(&buffer), 0, 0);
-            surface.damage_buffer(0, 0, width as i32, height as i32);
+            surface.damage_buffer(0, 0, (width * factor) as i32, (height * factor) as i32);
             surface.frame(qh, ());
             surface.commit();
         }
@@ -147,6 +171,23 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "xdg_wm_base" => {
                     state.shell = Some(registry.bind(name, version.min(3), qh, ()));
                     state.init(qh);
+                }
+                "wp_viewporter" if state.viewported => {
+                    let manager =
+                        registry.bind::<wp_viewporter::WpViewporter, _, _>(name, 1, qh, ());
+                    state.viewport =
+                        Some(manager.get_viewport(state.surface.as_ref().unwrap(), qh, ()));
+                    state.init(qh);
+                }
+                "wp_fractional_scale_manager_v1" if state.viewported => {
+                    let manager = registry
+                        .bind::<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1, _, _>(
+                        name,
+                        1,
+                        qh,
+                        (),
+                    );
+                    manager.get_fractional_scale(state.surface.as_ref().unwrap(), qh, ());
                 }
                 "wl_seat" => {
                     registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(7), qh, ());
@@ -571,6 +612,7 @@ fn multiwindow_roundtrip(gpu: bool) {
             connection.display().get_registry(&qh, ());
             let mut app = App {
                 title: format!("App {index}"),
+                viewported: index == 0,
                 color: if index == 0 { 0x102030 } else { 0x405060 },
                 events: Some(tx),
                 ..Default::default()
@@ -672,3 +714,22 @@ fn assert_pixels(actual: &[u32], expected: &[u32]) {
         "pixel differences (index, actual, expected): {mismatches:?}"
     );
 }
+
+impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        _: &wp_fractional_scale_v1::WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            assert_eq!(scale, 120);
+            state.notify("fractional-scale");
+        }
+    }
+}
+delegate_noop!(App: ignore wp_viewporter::WpViewporter);
+delegate_noop!(App: ignore wp_viewport::WpViewport);
+delegate_noop!(App: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);

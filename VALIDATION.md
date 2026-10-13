@@ -147,3 +147,33 @@ Press/release A in each titled window, resize one, then close one. The probe che
 scoped focus/key messages, resize/reset and the surviving window. Inspect native
 appearance, parent dialogs and pointer behavior separately on actual hardware.
 Whole Hyprland/desktop capture remains a roadmap item, not implemented support.
+
+## Toolkit compatibility and CLion startup
+
+The reported CLion/JBR 25.0.4+1-b508.27 failure is `Can't bind to the wp_viewporter
+interface`. JetBrains Runtime's native Wayland initialization explicitly requires
+that global. The compositor now delegates viewporter handling to Smithay, including
+commit validation and viewport-aware rendering, and advertises preferred fractional
+scale 1. The existing two-window integration tests use a doubled-resolution SHM
+buffer and viewport destination for one client; exact pixels and logical dimensions
+must survive rendering, focus, resize and close through Pixman and GLES.
+
+Linux CI downloads the matching JBRSDK 25.0.4 build b508.27 from JetBrains' official
+release distribution, checks its pinned SHA-512, and compiles the MIT-licensed
+`tests/fixtures/WaytransferSwingProbe.java`. Real Java tests require two titled
+windows and a transient parent relationship, typed characters received in the
+correct JTextField, no input crossing between windows, resize and independent
+close. Native `WLToolkit` and launcher-selected `XToolkit` are tested separately.
+The two X11 windows deliberately share an origin: raising the focused window in
+XWayland is required so sibling windows cannot intercept its pointer clicks.
+The test waits for the asynchronous Java text-field focus handshake before typing.
+Window resize is checked through both a Java component-resize marker and painted
+pixels at the new dimensions, rather than just server metadata.
+The native test cannot pass by silently falling back to X11: its toolkit class is
+asserted. `WAYTRANSFER_TEST_JBR` points to a JBRSDK locally; absent it, Java tests
+are skipped. Linux CI supplies it, so those tests are required there.
+
+This does not launch the CLion product or exercise its project indexing, plugins,
+GPU drivers or all dialogs/menus. The user's follow-up hardware check remains
+necessary. Mac presentation code and wire version stay unchanged. Consult the
+PR checks for final results.

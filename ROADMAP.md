@@ -8,6 +8,8 @@ Delivered (experimental):
   windows, titles, focus, close, debounced resizing and basic transient parents.
 - Software Pixman composition, optional EGL/GLES composition and driver-supported
   DMA-BUF import; optional rootless XWayland with per-window input/focus.
+- Viewport crop/scale and scale-1 fractional notifications; explicit GTK/Qt/Java
+  X11 launch profile and JetBrains Runtime native/X11 regression fixtures.
 - Shared transport tests, independent Wayland client tests and actual application
   smoke tests. See VALIDATION.md for verified paths and outstanding hardware checks.
 

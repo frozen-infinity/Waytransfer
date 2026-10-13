@@ -1,4 +1,4 @@
-//! Headless, one-toplevel Wayland compositor. Only wl_shm software clients are advertised.
+//! Headless multiwindow Wayland session with optional EGL and XWayland backends.
 use crate::{
     remote::WindowSnapshot, render_engine::RenderEngine, Dimensions, Message, MAX_SCENE_PIXELS,
     MAX_WINDOWS,
@@ -41,6 +41,7 @@ use smithay::{
             with_states, CompositorClientState, CompositorHandler, CompositorState,
             SurfaceAttributes,
         },
+        fractional_scale::{self, FractionalScaleHandler, FractionalScaleManagerState},
         output::{OutputHandler, OutputManagerState},
         selection::{
             data_device::{
@@ -55,6 +56,7 @@ use smithay::{
             XdgToplevelSurfaceData,
         },
         shm::{ShmHandler, ShmState},
+        viewporter::ViewporterState,
     },
 };
 use std::{
@@ -104,6 +106,8 @@ pub struct SingleWindow {
     data_device: DataDeviceState,
     _output_manager: OutputManagerState,
     _decorations: XdgDecorationState,
+    _viewporter: ViewporterState,
+    _fractional_scale: FractionalScaleManagerState,
     pub seat: Seat<Self>,
     pub output: Output,
     window: Option<Window>,
@@ -178,6 +182,8 @@ impl SingleWindow {
             data_device: DataDeviceState::new::<Self>(display),
             _output_manager: OutputManagerState::new_with_xdg_output::<Self>(display),
             _decorations: XdgDecorationState::new::<Self>(display),
+            _viewporter: ViewporterState::new::<Self>(display),
+            _fractional_scale: FractionalScaleManagerState::new::<Self>(display),
             seats,
             seat,
             output,
@@ -336,6 +342,17 @@ impl SingleWindow {
                     entry.window.set_activated(*other == id);
                     if let Some(top) = entry.window.toplevel() {
                         top.send_pending_configure();
+                    }
+                }
+                #[cfg(feature = "x11")]
+                if let (Some(surface), Some(xwm)) =
+                    (self.windows[&id].window.x11_surface(), self.xwm.as_mut())
+                {
+                    // XWayland also hit-tests the X11 stack. Native Mac windows
+                    // can overlap at the same remote origin, so raise the focused
+                    // X11 window before clicks reach it rather than its sibling.
+                    if let Err(error) = xwm.raise_window(surface) {
+                        eprintln!("X11 focus stacking: {error}");
                     }
                 }
                 self.scene_dirty = true;
@@ -830,6 +847,17 @@ impl ShmHandler for SingleWindow {
     }
 }
 impl OutputHandler for SingleWindow {}
+impl FractionalScaleHandler for SingleWindow {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        // The remote canvas currently uses logical pixels at scale 1. Clients
+        // may still crop/scale their buffers through wp_viewporter.
+        with_states(&surface, |states| {
+            fractional_scale::with_fractional_scale(states, |scale| scale.set_preferred_scale(1.0));
+        });
+    }
+}
+smithay::delegate_viewporter!(SingleWindow);
+smithay::delegate_fractional_scale!(SingleWindow);
 impl SeatHandler for SingleWindow {
     type KeyboardFocus = crate::keyboard_focus::KeyboardFocus;
     type PointerFocus = WlSurface;
@@ -881,7 +909,6 @@ impl XdgShellHandler for SingleWindow {
             if self.selected.is_none() {
                 state.states.set(xdg_toplevel::State::Activated);
             }
-            state.states.set(xdg_toplevel::State::Maximized);
         });
         surface.send_configure();
         let window = Window::new_wayland_window(surface.clone());
@@ -908,6 +935,26 @@ impl XdgShellHandler for SingleWindow {
     }
     fn title_changed(&mut self, _: ToplevelSurface) {
         self.scene_dirty = true;
+    }
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|state| state.states.set(xdg_toplevel::State::Maximized));
+        surface.send_configure();
+    }
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|state| state.states.unset(xdg_toplevel::State::Maximized));
+        surface.send_configure();
+    }
+    fn fullscreen_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>,
+    ) {
+        surface.with_pending_state(|state| state.states.set(xdg_toplevel::State::Fullscreen));
+        surface.send_configure();
+    }
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|state| state.states.unset(xdg_toplevel::State::Fullscreen));
+        surface.send_configure();
     }
     fn parent_changed(&mut self, _: ToplevelSurface) {
         self.scene_dirty = true;

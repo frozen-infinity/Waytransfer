@@ -38,6 +38,12 @@ public final class WaytransferSwingProbe {
         SwingUtilities.invokeAndWait(() -> {
             JFrame main = new JFrame("Waytransfer Java main");
             main.setUndecorated(true);
+            main.addComponentListener(new ComponentAdapter() {
+                @Override public void componentResized(ComponentEvent event) {
+                    try { Files.writeString(Path.of("main-size"), main.getWidth() + "x" + main.getHeight()); }
+                    catch (Exception error) { throw new RuntimeException(error); }
+                }
+            });
             main.setContentPane(content("main-key", Color.RED));
             main.setSize(640, 400);
             main.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);

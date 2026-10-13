@@ -254,16 +254,18 @@ fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
             "Java windows missing: {}",
             session.log()
         );
-        let find = |title: &str| {
+        let find = |title: &str, color: u32| {
             scene
                 .windows
                 .iter()
-                .find(|(_, window)| window.ready && window.title == title)
+                .find(|(_, window)| {
+                    window.ready && window.title == title && window.decoder.pixels.contains(&color)
+                })
                 .map(|(id, _)| *id)
         };
         if let (Some(main), Some(dialog)) = (
-            find("Waytransfer Java main"),
-            find("Waytransfer Java dialog"),
+            find("Waytransfer Java main", 0xff0000),
+            find("Waytransfer Java dialog", 0x0000ff),
         ) {
             break (main, dialog);
         }
@@ -324,7 +326,19 @@ fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
     let size = Dimensions::new(803, 509).unwrap();
     send(&mut viewer, main, Message::Resize { size });
     let deadline = Instant::now() + Duration::from_secs(10);
-    while scene.windows[&main].decoder.size != size {
+    while !fs::read_to_string(session.runtime.path().join("main-size"))
+        .is_ok_and(|s| s == "803x509")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "Java configure not applied: {}",
+            session.log()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    while scene.windows[&main].decoder.size != size
+        || scene.windows[&main].decoder.pixels.last() != Some(&0xff0000)
+    {
         assert!(
             Instant::now() < deadline,
             "Java did not resize: {}",

@@ -305,7 +305,7 @@ fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
         send(&mut viewer, id, Message::Keys { held: vec![key] });
         send(&mut viewer, id, Message::Keys { held: vec![] });
         let deadline = Instant::now() + Duration::from_secs(10);
-        while fs::read_to_string(session.runtime.path().join(marker)).as_deref() != Ok(letter)
+        while !fs::read_to_string(session.runtime.path().join(marker)).is_ok_and(|s| s == letter)
             || !fs::read_to_string(session.runtime.path().join(format!("{marker}-text")))
                 .is_ok_and(|s| s.contains(letter))
         {

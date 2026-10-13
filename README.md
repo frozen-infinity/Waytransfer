@@ -134,8 +134,48 @@ XWayland executable; GPU import depends on the installed EGL driver. Mesa softwa
 EGL tests exercise the accelerated API path, not physical GPU performance or
 NVIDIA compatibility. Kitty, IDEs and hardware DMA-BUF paths still need testing.
 
+## JetBrains IDEs and application backend selection
+
+The session implements `wp_viewporter` (buffer cropping/scaling) and
+`wp_fractional_scale_v1` (preferred scale currently 1). JetBrains' native Wayland
+runtime [requires viewporter during startup](https://github.com/JetBrains/JetBrainsRuntime/blob/44bb04f436c955532a14d7afd8b2387453c887c3/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.c#L943).
+This fixes the earlier `Can't bind to the wp_viewporter interface` startup failure;
+rebuild the OMEN compositor to receive the change. The Mac viewer/protocol is unchanged.
+
+Try CLion in the normal session (replace the executable path if needed):
+
+```sh
+cargo run --release --features compositor,gpu,x11 --bin compositor -- --gpu --x11 -- /opt/clion/bin/clion
+```
+
+`--app-backend auto` is the default: the child can use either session backend.
+Use `--app-backend wayland` to select GTK/Qt Wayland and remove the child's X11
+DISPLAY. A compatibility fallback is available for older or problematic toolkits:
+
+```sh
+cargo run --release --features compositor,gpu,x11 --bin compositor -- --gpu --x11 --app-backend x11 -- /opt/clion/bin/clion
+```
+
+X11 selection requires `--x11`. It sets GTK/Qt to X11, adds
+`-Dawt.toolkit.name=XToolkit` to the child's `JDK_JAVA_OPTIONS`, and prevents a
+Wayland connection to the existing desktop. It preserves other Java options.
+App-specific VM options that explicitly force `WLToolkit` may override the Java
+launch profile; remove the conflicting option or pass the IDE's documented
+`-Dawt.toolkit.name=XToolkit` launch argument. These settings affect the launched
+process and its children, not apps started separately in another terminal. Inherited
+`WAYLAND_SOCKET` is removed; the isolated XWayland launch does not reuse the desktop's
+`XAUTHORITY`.
+
+CI runs Swing windows/dialogs with JetBrains Runtime 25.0.4+1-b508.27 on both
+Wayland and X11, including keyboard text entry, resize and close. This tests the
+runtime/toolkit path; it is not a full CLion project/plugin/driver compatibility
+certification. Report the exact app version, launch command and stderr if an app
+still fails. Instance forwarding can open an existing desktop instance instead.
+
 ## Current support and limits
 
+- Viewport crop/scale and fractional-scale notification at scale 1; higher-resolution
+  client buffers are supported without adding Mac HiDPI negotiation.
 - Multiple Wayland xdg-shell and optional X11 windows, each with independent
   pixels, title, focus, size and lifecycle. Default initial size 640×400, scale 1.
   Limits: 16 windows and 8,388,608 total advertised pixels per session/viewer.

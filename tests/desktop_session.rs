@@ -210,8 +210,8 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
     send(
         &mut viewer,
         Message::Pointer {
-            x: 100,
-            y: 100,
+            x: 512,
+            y: 512,
             pressed: false,
         },
     );
@@ -254,6 +254,38 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
     );
     while scene.windows[&1].decoder.size != Dimensions::new(320, 240).unwrap() {
         read_scene(&mut viewer, &mut scene, &log);
+    }
+    // The same normalized position remains usable after downsampling the stream.
+    fs::remove_file(runtime.path().join("desktop-pointer-ok")).unwrap();
+    send(
+        &mut viewer,
+        Message::Pointer {
+            x: 512,
+            y: 512,
+            pressed: false,
+        },
+    );
+    send(
+        &mut viewer,
+        Message::Buttons {
+            right: true,
+            middle: false,
+        },
+    );
+    send(
+        &mut viewer,
+        Message::Buttons {
+            right: false,
+            middle: false,
+        },
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !runtime.path().join("desktop-pointer-ok").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "pointer failed after downsampling"
+        );
+        thread::sleep(Duration::from_millis(20));
     }
     keys(&mut viewer, vec![42]);
     drop(viewer);

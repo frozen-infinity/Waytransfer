@@ -24,6 +24,19 @@ pub fn map_pointer(x: f32, y: f32, native: (usize, usize), size: crate::Dimensio
     let py = (y.max(0.0) as f64 * f64::from(size.height) / native.1.max(1) as f64) as u16;
     (px.min(size.width - 1), py.min(size.height - 1))
 }
+/// Desktop coordinates use a fixed extent, independent of in-flight capture resizes.
+pub fn map_desktop_pointer(x: f32, y: f32, native: (usize, usize)) -> (u16, u16) {
+    let extent = crate::MAX_DIMENSION as u16;
+    map_pointer(
+        x,
+        y,
+        native,
+        crate::Dimensions {
+            width: extent,
+            height: extent,
+        },
+    )
+}
 /// Debounce drag bursts; only the final stable size requests a remote keyframe.
 pub struct ResizeTracker {
     native: (usize, usize),
@@ -219,6 +232,9 @@ mod resize_tests {
             map_pointer(900.0, 600.0, (900, 600), Dimensions::default()),
             (639, 399)
         );
+        assert_eq!(map_desktop_pointer(450.0, 300.0, (900, 600)), (1024, 1024));
+        assert_eq!(map_desktop_pointer(225.0, 150.0, (450, 300)), (1024, 1024));
+        assert_eq!(map_desktop_pointer(900.0, 600.0, (900, 600)), (2047, 2047));
         assert_eq!(tracker.observe((0, 0), now + Duration::from_secs(1)), None);
     }
 }

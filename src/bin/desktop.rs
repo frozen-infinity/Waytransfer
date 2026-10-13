@@ -75,7 +75,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
     let start = Instant::now();
-    let mut size = bound;
     let mut next = Instant::now();
     let mut pending_since = Instant::now();
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -92,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             state.release(desktop::time(start));
                             remote.disconnect_viewer()?;
                         }
-                        input => state.input(input, size, desktop::time(start)),
+                        input => state.input(input, desktop::time(start)),
                     },
                     Ok(_) => {}
                     Err(_) => break,
@@ -118,12 +117,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             if let Some((dimensions, pixels)) = state.take_frame(bound)? {
-                size = dimensions;
                 remote.publish_windows(vec![WindowSnapshot {
                     id: 1,
                     parent: None,
                     title: format!("Waytransfer desktop: {name}"),
-                    size,
+                    size: dimensions,
                     pixels: Arc::new(pixels),
                 }])?;
             }

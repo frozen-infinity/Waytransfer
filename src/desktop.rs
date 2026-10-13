@@ -168,7 +168,7 @@ impl DesktopState {
         copy.buffer.destroy();
         result.map(Some)
     }
-    pub fn input(&mut self, message: Message, size: Dimensions, time: u32) {
+    pub fn input(&mut self, message: Message, time: u32) {
         match message {
             Message::Focus { active } => {
                 if !active {
@@ -194,10 +194,10 @@ impl DesktopState {
                 if let Some(pointer) = &self.pointer {
                     pointer.motion_absolute(
                         time,
-                        u32::from(x.min(size.width - 1)),
-                        u32::from(y.min(size.height - 1)),
-                        u32::from(size.width),
-                        u32::from(size.height),
+                        u32::from(x),
+                        u32::from(y),
+                        crate::MAX_DIMENSION as u32,
+                        crate::MAX_DIMENSION as u32,
                     );
                 }
                 self.button(0, pressed, time);

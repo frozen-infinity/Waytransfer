@@ -10,6 +10,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      WAYTRANSFER_TEST_GPU: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
       WAYTRANSFER_TEST_WESTON: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v5
@@ -18,8 +20,14 @@ jobs:
           components: rustfmt, clippy
       - name: Linux viewer dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev libpixman-1-dev weston
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev libpixman-1-dev weston xwayland xterm x11-utils libegl1-mesa-dev libgles2-mesa-dev mesa-utils-extra
       - run: cargo fmt --check
       - run: cargo test --locked --all-features
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo build --locked --all-features
+      - name: Check optional Linux backend combinations
+        if: runner.os == 'Linux'
+        run: |
+          cargo clippy --locked --lib --bins --features compositor -- -D warnings
+          cargo clippy --locked --lib --bins --features compositor,x11 -- -D warnings
+          cargo clippy --locked --lib --bins --features compositor,gpu -- -D warnings

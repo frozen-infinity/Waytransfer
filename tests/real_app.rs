@@ -16,6 +16,38 @@ impl Drop for Session {
         let _ = self.0.wait();
     }
 }
+fn read_frame(stream: &mut TcpStream, decoder: &mut Decoder, id: &mut Option<u32>) {
+    loop {
+        match read_message(&mut *stream).unwrap() {
+            Message::WindowInfo { id: window, .. } => {
+                if id.is_none() {
+                    *id = Some(window);
+                }
+            }
+            Message::ForWindow {
+                id: window,
+                message,
+            } if Some(window) == *id => {
+                decoder.apply(*message).unwrap();
+                return;
+            }
+            Message::WindowGone { id: window } if Some(window) == *id => {
+                panic!("application window closed unexpectedly")
+            }
+            _ => {}
+        }
+    }
+}
+fn send_input(stream: &mut TcpStream, id: u32, message: Message) {
+    write_message(
+        stream,
+        &Message::ForWindow {
+            id,
+            message: Box::new(message),
+        },
+    )
+    .unwrap();
+}
 #[test]
 fn weston_terminal_renders_and_executes_remote_keyboard_input() {
     if std::env::var("WAYTRANSFER_TEST_WESTON").as_deref() != Ok("1") {
@@ -72,15 +104,20 @@ fn weston_terminal_renders_and_executes_remote_keyboard_input() {
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
     let mut decoder = Decoder::default();
+    let mut window_id = None;
     loop {
-        decoder.apply(read_message(&mut viewer).unwrap()).unwrap();
+        read_frame(&mut viewer, &mut decoder, &mut window_id);
         // The terminal produces varied text/background pixels, unlike the waiting screen.
         if decoder.pixels.iter().any(|p| *p != decoder.pixels[0]) {
             break;
         }
         assert!(Instant::now() < deadline, "terminal did not paint");
     }
-    write_message(&mut viewer, &Message::Focus { active: true }).unwrap();
+    send_input(
+        &mut viewer,
+        window_id.unwrap(),
+        Message::Focus { active: true },
+    );
     for character in "touch keyboard-ok\n".chars() {
         let key = match character {
             't' => 20,
@@ -100,8 +137,16 @@ fn weston_terminal_renders_and_executes_remote_keyboard_input() {
             '\n' => 28,
             _ => panic!("unexpected character"),
         };
-        write_message(&mut viewer, &Message::Keys { held: vec![key] }).unwrap();
-        write_message(&mut viewer, &Message::Keys { held: vec![] }).unwrap();
+        send_input(
+            &mut viewer,
+            window_id.unwrap(),
+            Message::Keys { held: vec![key] },
+        );
+        send_input(
+            &mut viewer,
+            window_id.unwrap(),
+            Message::Keys { held: vec![] },
+        );
     }
     while !runtime.path().join("keyboard-ok").exists() {
         assert!(
@@ -117,9 +162,9 @@ fn weston_terminal_renders_and_executes_remote_keyboard_input() {
     }
     // The shell must see the new terminal dimensions after xdg configure/repaint.
     let size = Dimensions::new(961, 607).unwrap();
-    write_message(&mut viewer, &Message::Resize { size }).unwrap();
+    send_input(&mut viewer, window_id.unwrap(), Message::Resize { size });
     while decoder.size != size {
-        decoder.apply(read_message(&mut viewer).unwrap()).unwrap();
+        read_frame(&mut viewer, &mut decoder, &mut window_id);
     }
     thread::sleep(Duration::from_millis(250));
     let before = runtime.path().join("keyboard-ok");
@@ -143,8 +188,16 @@ fn weston_terminal_renders_and_executes_remote_keyboard_input() {
             '\n' => 28,
             _ => panic!("unexpected character"),
         };
-        write_message(&mut viewer, &Message::Keys { held: vec![key] }).unwrap();
-        write_message(&mut viewer, &Message::Keys { held: vec![] }).unwrap();
+        send_input(
+            &mut viewer,
+            window_id.unwrap(),
+            Message::Keys { held: vec![key] },
+        );
+        send_input(
+            &mut viewer,
+            window_id.unwrap(),
+            Message::Keys { held: vec![] },
+        );
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     while !runtime.path().join("resize-ok").exists() {

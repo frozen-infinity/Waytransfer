@@ -27,6 +27,9 @@ use waytransfer::{
 
 #[derive(Default)]
 struct App {
+    title: String,
+    color: u32,
+    closed: bool,
     size: Dimensions,
     surface: Option<wl_surface::WlSurface>,
     shm: Option<wl_shm::WlShm>,
@@ -48,7 +51,11 @@ impl App {
             if let (Some(shell), Some(surface)) = (&self.shell, &self.surface) {
                 let xdg = shell.get_xdg_surface(surface, qh, ());
                 let top = xdg.get_toplevel(qh, ());
-                top.set_title("Waytransfer integration fixture".into());
+                top.set_title(if self.title.is_empty() {
+                    "Waytransfer integration fixture".into()
+                } else {
+                    self.title.clone()
+                });
                 self.xdg = Some(xdg);
                 surface.commit();
             }
@@ -56,7 +63,14 @@ impl App {
     }
     fn pixels(&self) -> Vec<u32> {
         let (width, height) = (self.size.width as usize, self.size.height as usize);
-        let mut pixels = vec![0x102030; width * height];
+        let mut pixels = vec![
+            if self.color == 0 {
+                0x102030
+            } else {
+                self.color
+            };
+            width * height
+        ];
         // Distinct corners detect flipped output and incorrect channel order.
         pixels[0] = 0xff0000;
         pixels[width - 1] = 0x00ff00;
@@ -181,6 +195,10 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let xdg_toplevel::Event::Close = event {
+            state.closed = true;
+            state.notify("close");
+        }
         if let xdg_toplevel::Event::Configure { width, height, .. } = event {
             state.size = Dimensions::new(width as usize, height as usize).unwrap();
             state.notify("configure");
@@ -351,7 +369,7 @@ fn real_wayland_shm_pixels_pointer_keyboard_focus_and_disconnect() {
             events: Some(events_tx),
             ..Default::default()
         };
-        while queue.blocking_dispatch(&mut app).is_ok() {}
+        while !app.closed && queue.blocking_dispatch(&mut app).is_ok() {}
     });
     let mut viewer = TcpStream::connect(addr).unwrap();
     handshake(&mut viewer).unwrap();
@@ -465,4 +483,192 @@ fn real_wayland_shm_pixels_pointer_keyboard_focus_and_disconnect() {
     drop(guard);
     server.join().unwrap();
     client.join().unwrap();
+}
+
+#[test]
+fn two_real_wayland_windows_keep_pixels_focus_resize_and_close_independent() {
+    multiwindow_roundtrip(false);
+}
+#[cfg(feature = "gpu")]
+#[test]
+fn egl_renderer_reconstructs_shm_corners_without_flip_or_channel_errors() {
+    if std::env::var("WAYTRANSFER_TEST_GPU").as_deref() != Ok("1") {
+        return;
+    }
+    multiwindow_roundtrip(true);
+}
+fn multiwindow_roundtrip(gpu: bool) {
+    use waytransfer::{client_scene::ClientScene, render_engine::RenderEngine};
+    let remote = RemoteServer::bind_multi("127.0.0.1:0").unwrap();
+    let addr = remote.local_addr();
+    let mut peers = Vec::new();
+    let mut streams = Vec::new();
+    for _ in 0..2 {
+        let (peer, stream) = UnixStream::pair().unwrap();
+        peers.push(peer);
+        streams.push(stream);
+    }
+    let running = Arc::new(AtomicBool::new(true));
+    let server_running = running.clone();
+    let (ready_tx, ready) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut display = SingleWindow::new_display().unwrap();
+        let dh = display.handle();
+        let mut state = SingleWindow::new(&dh).unwrap();
+        for stream in streams {
+            state.insert_client(&dh, stream).unwrap();
+        }
+        let mut renderer = if gpu {
+            #[cfg(feature = "gpu")]
+            {
+                let renderer = RenderEngine::gpu(&dh).unwrap();
+                state.advertise_gpu(&renderer).unwrap();
+                renderer
+            }
+            #[cfg(not(feature = "gpu"))]
+            {
+                panic!("GPU feature required")
+            }
+        } else {
+            RenderEngine::software().unwrap()
+        };
+        ready_tx.send(()).unwrap();
+        while server_running.load(Ordering::Relaxed) {
+            display.dispatch_clients(&mut state).unwrap();
+            for _ in 0..128 {
+                match remote.events.try_recv() {
+                    Ok(RemoteEvent::Input(message)) => state.input(message).unwrap(),
+                    Ok(RemoteEvent::Disconnected) => state.release_input(),
+                    Err(_) => break,
+                }
+            }
+            if let Some(windows) = state.render_windows(&mut renderer).unwrap() {
+                remote.publish_windows(windows).unwrap();
+            }
+            display.flush_clients().unwrap();
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+    struct Stop(Arc<AtomicBool>);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Relaxed);
+        }
+    }
+    let guard = Stop(running);
+    ready
+        .recv_timeout(Duration::from_secs(30))
+        .expect("renderer startup failed");
+    let mut clients = Vec::new();
+    let mut receivers = Vec::new();
+    for (index, peer) in peers.into_iter().enumerate() {
+        let (tx, rx) = mpsc::channel();
+        receivers.push(rx);
+        clients.push(thread::spawn(move || {
+            let connection = Connection::from_socket(peer).unwrap();
+            let mut queue = connection.new_event_queue();
+            let qh = queue.handle();
+            connection.display().get_registry(&qh, ());
+            let mut app = App {
+                title: format!("App {index}"),
+                color: if index == 0 { 0x102030 } else { 0x405060 },
+                events: Some(tx),
+                ..Default::default()
+            };
+            while !app.closed && queue.blocking_dispatch(&mut app).is_ok() {}
+        }));
+    }
+    let mut viewer = TcpStream::connect(addr).unwrap();
+    handshake(&mut viewer).unwrap();
+    viewer
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+    let mut scene = ClientScene::default();
+    while scene.windows.len() != 2 || scene.windows.values().any(|window| !window.ready) {
+        scene.apply(read_message(&mut viewer).unwrap()).unwrap();
+    }
+    let first = *scene
+        .windows
+        .iter()
+        .find(|(_, window)| window.title == "App 0")
+        .unwrap()
+        .0;
+    let second = *scene
+        .windows
+        .iter()
+        .find(|(_, window)| window.title == "App 1")
+        .unwrap()
+        .0;
+    assert_pixels(
+        &scene.windows[&first].decoder.pixels,
+        &App::default().pixels(),
+    );
+    assert_pixels(
+        &scene.windows[&second].decoder.pixels,
+        &App {
+            color: 0x405060,
+            ..Default::default()
+        }
+        .pixels(),
+    );
+    let send = |viewer: &mut TcpStream, id, message| {
+        write_message(
+            viewer,
+            &Message::ForWindow {
+                id,
+                message: Box::new(message),
+            },
+        )
+        .unwrap()
+    };
+    send(&mut viewer, second, Message::Focus { active: true });
+    send(&mut viewer, second, Message::Keys { held: vec![30] });
+    while scene.windows[&second].decoder.pixels[10 * WIDTH + 10] != 0xabcdef {
+        scene.apply(read_message(&mut viewer).unwrap()).unwrap();
+    }
+    assert_eq!(
+        scene.windows[&first].decoder.pixels[10 * WIDTH + 10],
+        0x102030
+    );
+    send(&mut viewer, first, Message::Focus { active: true });
+    send(&mut viewer, first, Message::Keys { held: vec![30] });
+    while scene.windows[&first].decoder.pixels[10 * WIDTH + 10] != 0xabcdef
+        || scene.windows[&second].decoder.pixels[10 * WIDTH + 10] != 0x123456
+    {
+        scene.apply(read_message(&mut viewer).unwrap()).unwrap();
+    }
+    let size = Dimensions::new(801, 503).unwrap();
+    send(&mut viewer, second, Message::Resize { size });
+    while scene.windows[&second].decoder.size != size {
+        scene.apply(read_message(&mut viewer).unwrap()).unwrap();
+    }
+    assert_eq!(scene.windows[&first].decoder.size, Dimensions::default());
+    send(&mut viewer, first, Message::Close);
+    while scene.windows.contains_key(&first) {
+        scene.apply(read_message(&mut viewer).unwrap()).unwrap();
+    }
+    assert!(scene.windows.contains_key(&second));
+    drop(viewer);
+    drop(guard);
+    server.join().unwrap();
+    for client in clients {
+        client.join().unwrap();
+    }
+    drop(receivers);
+}
+
+fn assert_pixels(actual: &[u32], expected: &[u32]) {
+    assert_eq!(actual.len(), expected.len());
+    let mismatches: Vec<_> = actual
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .take(12)
+        .map(|(index, (a, b))| (index, format!("{a:06x}"), format!("{b:06x}")))
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "pixel differences (index, actual, expected): {mismatches:?}"
+    );
 }

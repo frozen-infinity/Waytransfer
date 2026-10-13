@@ -27,9 +27,9 @@ terminal executed the remote command. It is enabled explicitly with
 `WAYTRANSFER_TEST_WESTON=1`, and mandatory in Linux CI. See the PR checks for the
 results of the final revision; an unset variable skips this optional local test.
 
-Popup/subsurface compatibility beyond the tested primary surface, GUI rendering
-on physical Mac/OMEN hardware, IDEs, GPU clients, wireless bandwidth and latency
-have not been validated. No production-compositor or broad application-compatibility
+At that milestone, popup/subsurface compatibility beyond the primary surface,
+GUI rendering on physical Mac/OMEN hardware, IDEs, GPU clients and wireless
+performance had not been validated. See the multiwindow milestone below. No production-compositor or broad application-compatibility
 claim follows from these tests.
 
 ## macOS input focus correction
@@ -105,3 +105,45 @@ same checks, including real Wayland SHM and weston-terminal input/resize tests.
 Consult the PR checks for the final revision. Native GUI focus/resize checks above
 were performed before the v4 codec change; the UI/event-handling code is unchanged.
 Physical OMEN/Mac v4 testing remains a hardware check.
+
+## Multiwindow, EGL and XWayland (v5)
+
+The protocol has scoped frame/input messages and bounded window metadata/lifecycle.
+Shared tests cover two independent framebuffers, transient metadata, close without
+removing the survivor, reconnect, unknown-window frames, nested envelopes, invalid
+UTF-8/control titles, parent cycles and per-scene resource limits. Binary fixtures
+pin new message layouts independently of the writer.
+
+Linux integration tests create two independent real Wayland SHM clients and verify
+exact colors/corners, focus/key routing and release, independent resize and closing
+one while the other survives. The same test runs with offscreen EGL/GLES, catching
+readback orientation/channel mistakes. No pixel-array dumps are needed for failures.
+
+Actual application tests launch the compositor binary with a private runtime:
+
+- `weston-terminal`: visible pixels, typed commands before/after resizing.
+- `xterm` through rootless XWayland: wait for painted text, type a shell command,
+  verify its created file, close the scoped window. Software and EGL composition.
+- `weston-simple-egl`: nonuniform rendered pixels and changing animation frames.
+
+Linux CI sets `WAYTRANSFER_TEST_WESTON=1`, `WAYTRANSFER_TEST_GPU=1` and
+`LIBGL_ALWAYS_SOFTWARE=1`. These tests exercise Mesa software EGL and XWayland;
+physical hardware DMA-BUF imports, NVIDIA drivers, X11 GLX and Kitty/IDE behavior
+remain unverified. Optional feature combinations receive separate Clippy checks.
+macOS builds/tests exercise the viewer, shared codec and scene management; they do
+not exercise the Linux-only modules. Consult the final PR checks for pass/fail.
+
+Native multiwindow GUI verification is pending. Automatic approval review blocked
+launching the locally built Mac test app because it requires action-time approval.
+The previous native single-window focus/resize results do not establish multiwindow
+GUI correctness. A reproducible manual probe is supplied:
+
+```sh
+cargo run --example multiwindow_probe
+cargo run --features viewer --bin viewer -- 127.0.0.1:17879
+```
+
+Press/release A in each titled window, resize one, then close one. The probe checks
+scoped focus/key messages, resize/reset and the surviving window. Inspect native
+appearance, parent dialogs and pointer behavior separately on actual hardware.
+Whole Hyprland/desktop capture remains a roadmap item, not implemented support.

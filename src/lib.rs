@@ -1,6 +1,6 @@
 //! Versioned, bounded transport and lossless dirty-tile reconstruction.
 use std::io;
-pub const VERSION: u16 = 4;
+pub const VERSION: u16 = 5;
 pub const WIDTH: usize = 640;
 pub const HEIGHT: usize = 400;
 pub const TILE: usize = 32;
@@ -8,6 +8,9 @@ pub const TILE: usize = 32;
 pub const MAX_PACKET: usize = 12 * 1024 * 1024;
 pub const MAX_DIMENSION: usize = 2048;
 pub const MAX_PIXELS: usize = 2_097_152;
+pub const MAX_WINDOWS: usize = 16;
+pub const MAX_SCENE_PIXELS: usize = MAX_PIXELS * 4;
+pub const MAX_TITLE_BYTES: usize = 512;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dimensions {
     pub width: u16,
@@ -74,6 +77,20 @@ impl std::str::FromStr for Dimensions {
 }
 #[derive(Debug, PartialEq)]
 pub enum Message {
+    WindowInfo {
+        id: u32,
+        parent: Option<u32>,
+        size: Dimensions,
+        title: String,
+    },
+    WindowGone {
+        id: u32,
+    },
+    ForWindow {
+        id: u32,
+        message: Box<Message>,
+    },
+    Close,
     Hello {
         version: u16,
     },
@@ -295,3 +312,27 @@ pub mod compositor;
 pub mod remote;
 #[cfg(feature = "viewer")]
 pub mod viewer_input;
+
+/// Bound titles without splitting UTF-8; remove controls before native title APIs.
+pub fn window_title(title: &str) -> String {
+    let mut out = String::new();
+    for c in title.chars().filter(|c| !c.is_control()) {
+        if out.len() + c.len_utf8() > MAX_TITLE_BYTES {
+            break;
+        }
+        out.push(c);
+    }
+    if out.is_empty() {
+        out.push_str("Waytransfer");
+    }
+    out
+}
+
+#[cfg(all(target_os = "linux", feature = "compositor"))]
+pub mod render_engine;
+
+pub mod client_scene;
+#[cfg(all(target_os = "linux", feature = "compositor"))]
+pub mod keyboard_focus;
+#[cfg(all(target_os = "linux", feature = "x11"))]
+pub mod x11;

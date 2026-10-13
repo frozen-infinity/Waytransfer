@@ -1,7 +1,7 @@
-# Waytransfer wire protocol v4
+# Waytransfer wire protocol v5
 
-Experimental single-surface protocol over one bidirectional, ordered TCP stream.
-Both peers send Hello first and require version 4. Versions 1–3 use JSON and are
+Experimental window-scoped protocol over one bidirectional, ordered TCP stream.
+Both peers send Hello first and require version 5. Versions 1–3 use JSON; version 4 lacks window scoping. All are
 incompatible; rebuild both machines. There is no automatic downgrade.
 
 Each packet begins with a **u32 big-endian body length**, excluding the four-byte
@@ -22,6 +22,10 @@ errors; do not skip unknown messages in this version.
 | 6 | Buttons | right pressed: u8, middle pressed: u8 |
 | 7 | Scroll | horizontal: i16, vertical: i16 |
 | 8 | Focus | active: u8 |
+| 9 | WindowInfo | id: u32, parent: u32 (0 = none), width: u16, height: u16, title byte count: u16, UTF-8 title |
+| 10 | WindowGone | id: u32 |
+| 11 | ForWindow | id: u32, one nested message body (no length prefix) |
+| 12 | Close | no fields |
 
 A Frame has a 16-byte fixed body header including its tag. Each tile contains
 `x: u16, y: u16, compressed length: u16, LZ4 bytes`. Tile coordinates are pixel
@@ -52,8 +56,23 @@ held-state snapshots. Scroll values are signed deltas. Focus loss/disconnect rel
 held input. Resize is a request, not an acknowledgement: the subsequent Frame size
 reports the current canvas, which may precede an application's resized buffer commit.
 
-Client-to-server after Hello: Pointer, Resize, Keys, Buttons, Scroll and Focus.
-Server-to-client after Hello: Frame only. Authentication/encryption is supplied by
+In multiwindow mode the server sends WindowInfo before a window's first scoped
+Frame and on title/parent/dimension changes; WindowGone removes it. IDs are nonzero,
+unique live IDs. Titles contain at most 512 UTF-8 bytes and no control characters.
+Up to 16 windows and 8,388,608 aggregate advertised pixels are accepted. Each window
+has its own framebuffer and increasing sequence; metadata dimensions must match
+its frames. Closing locally discards in-flight frames until WindowGone.
+
+ForWindow may contain Frame, Pointer, Resize, Keys, Buttons, Scroll, Focus or Close.
+Nested envelopes and scoped lifecycle/Hello messages are invalid. Client-to-server
+controls are scoped in multiwindow mode; Close is valid only scoped. Server-to-client
+sends WindowInfo, WindowGone and scoped Frames. The original synthetic demo uses
+unscoped Frames/controls; the viewer rejects mixing demo and multiwindow streams.
+Focus changes release the previous window's held input; stale focus-loss events
+must not steal focus from the new window. A close requests application shutdown;
+an application may delay or reject it.
+
+Authentication/encryption is supplied by
 the recommended SSH tunnel, not this protocol.
 
 Golden fixtures and invalid/fragmented packet tests are in `tests/wire.rs`. For

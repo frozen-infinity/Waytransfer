@@ -180,3 +180,54 @@ fn deterministic_malformed_packet_corpus_does_not_panic() {
         }
     }
 }
+
+#[test]
+fn window_lifecycle_fixtures_and_invalid_envelopes() {
+    let cases = [
+        (
+            Message::WindowInfo {
+                id: 7,
+                parent: Some(2),
+                size: Dimensions::new(1, 2).unwrap(),
+                title: "λ".into(),
+            },
+            vec![9, 0, 0, 0, 7, 0, 0, 0, 2, 0, 1, 0, 2, 0, 2, 0xce, 0xbb],
+        ),
+        (Message::WindowGone { id: 7 }, vec![10, 0, 0, 0, 7]),
+        (
+            Message::ForWindow {
+                id: 7,
+                message: Box::new(Message::Focus { active: true }),
+            },
+            vec![11, 0, 0, 0, 7, 8, 1],
+        ),
+        (
+            Message::ForWindow {
+                id: 7,
+                message: Box::new(Message::Close),
+            },
+            vec![11, 0, 0, 0, 7, 12],
+        ),
+    ];
+    for (message, body) in cases {
+        let expected = packet(&body);
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &message).unwrap();
+        assert_eq!(bytes, expected);
+        assert_eq!(read_message(Cursor::new(expected)).unwrap(), message);
+        for end in 0..body.len() {
+            assert!(read_message(Cursor::new(packet(&body[..end]))).is_err());
+        }
+    }
+    for body in [
+        vec![10, 0, 0, 0, 0],                                    // reserved ID
+        vec![11, 0, 0, 0, 7, 11, 0, 0, 0, 2, 12],                // nested envelope
+        vec![11, 0, 0, 0, 7, 1, 0, 5],                           // scoped hello
+        vec![11, 0, 0, 0, 7, 10, 0, 0, 0, 2],                    // scoped lifecycle
+        vec![9, 0, 0, 0, 7, 0, 0, 0, 7, 0, 1, 0, 1, 0, 0],       // self parent
+        vec![9, 0, 0, 0, 7, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0xff], // invalid UTF-8
+        vec![9, 0, 0, 0, 7, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 10],   // control title
+    ] {
+        assert!(read_message(Cursor::new(packet(&body))).is_err());
+    }
+}

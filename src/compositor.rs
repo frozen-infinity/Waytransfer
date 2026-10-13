@@ -1,5 +1,8 @@
 //! Headless, one-toplevel Wayland compositor. Only wl_shm software clients are advertised.
-use crate::{Dimensions, Message};
+use crate::{
+    remote::WindowSnapshot, render_engine::RenderEngine, Dimensions, Message, MAX_SCENE_PIXELS,
+    MAX_WINDOWS,
+};
 use smithay::{
     backend::{
         input::{Axis, AxisSource, ButtonState, KeyState},
@@ -35,7 +38,8 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes,
+            with_states, CompositorClientState, CompositorHandler, CompositorState,
+            SurfaceAttributes,
         },
         output::{OutputHandler, OutputManagerState},
         selection::{
@@ -48,11 +52,18 @@ use smithay::{
         shell::xdg::{
             decoration::{XdgDecorationHandler, XdgDecorationState},
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+            XdgToplevelSurfaceData,
         },
         shm::{ShmHandler, ShmState},
     },
 };
-use std::{collections::BTreeSet, error::Error, os::unix::io::OwnedFd, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    os::unix::io::OwnedFd,
+    sync::Arc,
+    time::Instant,
+};
 
 #[derive(Default)]
 pub struct ClientState {
@@ -63,7 +74,28 @@ impl ClientData for ClientState {
     fn disconnected(&self, _: ClientId, _: DisconnectReason) {}
 }
 
+struct WindowEntry {
+    window: Window,
+    size: Dimensions,
+    pixels: Option<Arc<Vec<u32>>>,
+    dirty: bool,
+}
 pub struct SingleWindow {
+    windows: BTreeMap<u32, WindowEntry>,
+    next_id: u32,
+    selected: Option<u32>,
+    scene_dirty: bool,
+    #[cfg(feature = "x11")]
+    pub(crate) xwm: Option<smithay::xwayland::X11Wm>,
+    #[cfg(feature = "x11")]
+    pub(crate) xwayland_shell: smithay::wayland::xwayland_shell::XWaylandShellState,
+    #[cfg(feature = "x11")]
+    pub x11_display: Option<u32>,
+    #[cfg(feature = "gpu")]
+    pub(crate) dmabuf_state: smithay::wayland::dmabuf::DmabufState,
+    #[cfg(feature = "gpu")]
+    pub(crate) import_renderer: Option<smithay::backend::renderer::gles::GlesRenderer>,
+
     display: DisplayHandle,
     compositor: CompositorState,
     shell: XdgShellState,
@@ -76,6 +108,7 @@ pub struct SingleWindow {
     pub output: Output,
     window: Option<Window>,
     size: Dimensions,
+    initial_size: Dimensions,
     popups: PopupManager,
     dirty: bool,
     start: Instant,
@@ -122,6 +155,22 @@ impl SingleWindow {
         );
         output.set_preferred(mode);
         Ok(Self {
+            windows: BTreeMap::new(),
+            next_id: 1,
+            selected: None,
+            scene_dirty: true,
+            #[cfg(feature = "x11")]
+            xwm: None,
+            #[cfg(feature = "x11")]
+            xwayland_shell: smithay::wayland::xwayland_shell::XWaylandShellState::new::<Self>(
+                display,
+            ),
+            #[cfg(feature = "x11")]
+            x11_display: None,
+            #[cfg(feature = "gpu")]
+            dmabuf_state: smithay::wayland::dmabuf::DmabufState::new(),
+            #[cfg(feature = "gpu")]
+            import_renderer: None,
             display: display.clone(),
             compositor: CompositorState::new::<Self>(display),
             shell: XdgShellState::new::<Self>(display),
@@ -134,6 +183,7 @@ impl SingleWindow {
             output,
             window: None,
             size,
+            initial_size: size,
             popups: PopupManager::default(),
             dirty: true,
             start: Instant::now(),
@@ -150,6 +200,237 @@ impl SingleWindow {
         display
             .clone()
             .insert_client(stream, Arc::new(ClientState::default()))
+    }
+    #[cfg(feature = "x11")]
+    pub(crate) fn window_entries(&self) -> impl Iterator<Item = (u32, &Window)> {
+        self.windows.iter().map(|(id, entry)| (*id, &entry.window))
+    }
+    #[cfg(feature = "x11")]
+    pub(crate) fn mark_all_dirty(&mut self) {
+        for entry in self.windows.values_mut() {
+            entry.dirty = true;
+        }
+        self.scene_dirty = true;
+    }
+    #[cfg(feature = "x11")]
+    pub(crate) fn mark_metadata_dirty(&mut self) {
+        self.scene_dirty = true;
+    }
+    pub fn window_count(&self) -> usize {
+        self.windows.len()
+    }
+    pub(crate) fn register_window(&mut self, window: Window, size: Dimensions) -> Option<u32> {
+        if self.windows.len() >= MAX_WINDOWS
+            || self
+                .windows
+                .values()
+                .map(|w| w.size.pixel_count())
+                .sum::<usize>()
+                + size.pixel_count()
+                > MAX_SCENE_PIXELS
+        {
+            eprintln!("Window resource budget reached");
+            return None;
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.checked_add(1)?;
+        self.windows.insert(
+            id,
+            WindowEntry {
+                window: window.clone(),
+                size,
+                pixels: None,
+                dirty: true,
+            },
+        );
+        self.scene_dirty = true;
+        if self.selected.is_none() {
+            self.selected = Some(id);
+            self.window = Some(window);
+            self.size = size;
+            self.keyboard_focus();
+        }
+        Some(id)
+    }
+    pub(crate) fn remove_window(&mut self, id: u32) {
+        if self.selected == Some(id) {
+            self.release_input();
+            self.selected = None;
+            self.window = None;
+        }
+        self.windows.remove(&id);
+        self.scene_dirty = true;
+        if self.selected.is_none() {
+            if let Some((&next, entry)) = self.windows.iter().next() {
+                self.selected = Some(next);
+                self.window = Some(entry.window.clone());
+                self.size = entry.size;
+            }
+            self.keyboard_focus();
+        }
+    }
+    pub fn input_window(&mut self, id: u32, message: Message) -> Result<(), &'static str> {
+        if !self.windows.contains_key(&id) {
+            return Ok(());
+        }
+        match message {
+            Message::Close => {
+                let window = &self.windows[&id].window;
+                if let Some(top) = window.toplevel() {
+                    top.send_close();
+                }
+                #[cfg(feature = "x11")]
+                if let Some(surface) = window.x11_surface() {
+                    let _ = surface.close();
+                }
+                Ok(())
+            }
+            Message::Resize { size } => {
+                size.validate().map_err(|_| "invalid size")?;
+                let total: usize = self
+                    .windows
+                    .iter()
+                    .filter(|(other, _)| **other != id)
+                    .map(|(_, w)| w.size.pixel_count())
+                    .sum();
+                if total + size.pixel_count() > MAX_SCENE_PIXELS {
+                    return Err("scene pixel budget");
+                }
+                let selected = self.selected;
+                let old_window = self.window.clone();
+                let old_size = self.size;
+                self.window = Some(self.windows[&id].window.clone());
+                self.size = self.windows[&id].size;
+                self.resize(size).map_err(|_| "invalid size")?;
+                let entry = self.windows.get_mut(&id).unwrap();
+                entry.size = size;
+                entry.dirty = true;
+                self.scene_dirty = true;
+                #[cfg(feature = "x11")]
+                if let Some(surface) = entry.window.x11_surface() {
+                    let _ = surface.configure(Rectangle::from_size(
+                        (size.width as i32, size.height as i32).into(),
+                    ));
+                }
+                if selected != Some(id) {
+                    self.window = old_window;
+                    self.size = old_size;
+                }
+                Ok(())
+            }
+            Message::Focus { active: true } => {
+                if self.selected != Some(id) {
+                    self.release_input();
+                    let keyboard = self.seat.get_keyboard().unwrap();
+                    keyboard.unset_grab(self);
+                    self.seat.get_pointer().unwrap().unset_grab(
+                        self,
+                        SERIAL_COUNTER.next_serial(),
+                        self.start.elapsed().as_millis() as u32,
+                    );
+                    self.selected = Some(id);
+                    self.window = Some(self.windows[&id].window.clone());
+                    self.size = self.windows[&id].size;
+                }
+                for (other, entry) in &self.windows {
+                    entry.window.set_activated(*other == id);
+                    if let Some(top) = entry.window.toplevel() {
+                        top.send_pending_configure();
+                    }
+                }
+                self.scene_dirty = true;
+                self.input(Message::Focus { active: true })
+            }
+            other if self.selected == Some(id) => self.input(other),
+            _ => Ok(()),
+        }
+    }
+    pub fn render_windows(
+        &mut self,
+        renderer: &mut RenderEngine,
+    ) -> Result<Option<Vec<WindowSnapshot>>, Box<dyn Error>> {
+        self.keyboard_focus();
+        self.popups.cleanup();
+        let mut changed = std::mem::take(&mut self.scene_dirty);
+        for entry in self.windows.values_mut() {
+            if entry.dirty {
+                entry.dirty = false;
+                entry.window.on_commit();
+                if entry.window.bbox().size.w > 0 && entry.window.bbox().size.h > 0 {
+                    entry.pixels =
+                        Some(Arc::new(renderer.render(Some(&entry.window), entry.size)?));
+                    entry.window.with_surfaces(|_, states| {
+                        for callback in states
+                            .cached_state
+                            .get::<SurfaceAttributes>()
+                            .current()
+                            .frame_callbacks
+                            .drain(..)
+                        {
+                            callback.done(self.start.elapsed().as_millis() as u32);
+                        }
+                    });
+                } else {
+                    entry.pixels = None;
+                }
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(None);
+        }
+        let mut snapshots = Vec::new();
+        for (&id, entry) in &self.windows {
+            if let Some(pixels) = &entry.pixels {
+                let mut parent = None;
+                let mut title = String::new();
+                if let Some(top) = entry.window.toplevel() {
+                    with_states(top.wl_surface(), |states| {
+                        let data = states
+                            .data_map
+                            .get::<XdgToplevelSurfaceData>()
+                            .unwrap()
+                            .lock()
+                            .unwrap();
+                        title = data.title.clone().unwrap_or_default();
+                        parent = data.parent.as_ref().and_then(|surface| {
+                            self.windows
+                                .iter()
+                                .find(|(_, entry)| {
+                                    entry
+                                        .window
+                                        .toplevel()
+                                        .is_some_and(|top| top.wl_surface() == surface)
+                                })
+                                .map(|(id, _)| *id)
+                        });
+                    });
+                }
+                #[cfg(feature = "x11")]
+                if let Some(surface) = entry.window.x11_surface() {
+                    title = surface.title();
+                    parent = surface.is_transient_for().and_then(|parent| {
+                        self.windows
+                            .iter()
+                            .find(|(_, entry)| {
+                                entry
+                                    .window
+                                    .x11_surface()
+                                    .is_some_and(|surface| surface.window_id() == parent)
+                            })
+                            .map(|(id, _)| *id)
+                    });
+                }
+                snapshots.push(WindowSnapshot {
+                    id,
+                    parent,
+                    title: crate::window_title(&title),
+                    size: entry.size,
+                    pixels: pixels.clone(),
+                });
+            }
+        }
+        Ok(Some(snapshots))
     }
     pub fn dimensions(&self) -> Dimensions {
         self.size
@@ -183,16 +464,35 @@ impl SingleWindow {
         Ok(())
     }
     fn root(&self) -> Option<WlSurface> {
-        self.window
-            .as_ref()?
-            .toplevel()
-            .map(|s| s.wl_surface().clone())
+        let window = self.window.as_ref()?;
+        if let Some(top) = window.toplevel() {
+            return Some(top.wl_surface().clone());
+        }
+        #[cfg(feature = "x11")]
+        if let Some(surface) = window.x11_surface() {
+            return surface.wl_surface();
+        }
+        None
+    }
+    fn focus_target(&self) -> Option<crate::keyboard_focus::KeyboardFocus> {
+        #[cfg(feature = "x11")]
+        let window = self.window.as_ref()?;
+        #[cfg(feature = "x11")]
+        if let Some(surface) = window.x11_surface() {
+            surface.wl_surface()?;
+            return Some(crate::keyboard_focus::KeyboardFocus::X11(surface.clone()));
+        }
+        self.root().map(Into::into)
     }
     fn keyboard_focus(&mut self) {
         if self.seat.get_keyboard().unwrap().is_grabbed() {
             return;
         }
-        let surface = if self.active { self.root() } else { None };
+        let surface = if self.active {
+            self.focus_target()
+        } else {
+            None
+        };
         let keyboard = self.seat.get_keyboard().unwrap();
         if keyboard.current_focus() != surface {
             keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
@@ -243,6 +543,7 @@ impl SingleWindow {
         let time = self.start.elapsed().as_millis() as u32;
         self.keyboard_focus();
         match message {
+            Message::ForWindow { id, message } => return self.input_window(id, *message),
             Message::Resize { size } => {
                 self.resize(size).map_err(|_| "unsupported resize")?;
             }
@@ -457,7 +758,14 @@ impl CompositorHandler for SingleWindow {
         &mut self.compositor
     }
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client.get_data::<ClientState>().unwrap().compositor_state
+        if let Some(data) = client.get_data::<ClientState>() {
+            return &data.compositor_state;
+        }
+        #[cfg(feature = "x11")]
+        if let Some(data) = client.get_data::<smithay::xwayland::XWaylandClientData>() {
+            return &data.compositor_state;
+        }
+        panic!("client has no compositor state")
     }
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
@@ -469,9 +777,50 @@ impl CompositorHandler for SingleWindow {
                 Rectangle::from_size((self.size.width as i32, self.size.height as i32).into()),
             );
         }
+        let mut total: usize = self
+            .windows
+            .values()
+            .map(|entry| entry.size.pixel_count())
+            .sum();
+        for (&id, entry) in &mut self.windows {
+            entry.window.on_commit();
+            let mut matches = false;
+            entry.window.with_surfaces(|candidate, _| {
+                if candidate == surface {
+                    matches = true;
+                }
+            });
+            if matches {
+                entry.dirty = true;
+                entry.window.output_enter(
+                    &self.output,
+                    Rectangle::from_size(
+                        (entry.size.width as i32, entry.size.height as i32).into(),
+                    ),
+                );
+                let geometry = entry.window.geometry();
+                if geometry.size.w > 0 && geometry.size.h > 0 {
+                    if let Ok(actual) =
+                        Dimensions::new(geometry.size.w as usize, geometry.size.h as usize)
+                    {
+                        if total - entry.size.pixel_count() + actual.pixel_count()
+                            <= MAX_SCENE_PIXELS
+                        {
+                            total = total - entry.size.pixel_count() + actual.pixel_count();
+                            entry.size = actual;
+                            if self.selected == Some(id) {
+                                self.size = actual;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.dirty = true;
+        self.keyboard_focus();
     }
     fn destroyed(&mut self, _: &WlSurface) {
+        self.scene_dirty = true;
         self.dirty = true;
     }
 }
@@ -482,14 +831,25 @@ impl ShmHandler for SingleWindow {
 }
 impl OutputHandler for SingleWindow {}
 impl SeatHandler for SingleWindow {
-    type KeyboardFocus = WlSurface;
+    type KeyboardFocus = crate::keyboard_focus::KeyboardFocus;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seats
     }
-    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
-        set_data_device_focus(&self.display, seat, focused.and_then(|s| s.client()));
+    fn focus_changed(
+        &mut self,
+        seat: &Seat<Self>,
+        focused: Option<&crate::keyboard_focus::KeyboardFocus>,
+    ) {
+        set_data_device_focus(
+            &self.display,
+            seat,
+            focused.and_then(|s| {
+                use smithay::wayland::seat::WaylandFocus;
+                s.wl_surface().and_then(|surface| surface.client())
+            }),
+        );
     }
     fn cursor_image(&mut self, _: &Seat<Self>, _: CursorImageStatus) {}
 }
@@ -510,27 +870,49 @@ impl XdgShellHandler for SingleWindow {
         &mut self.shell
     }
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        if self.window.is_some() {
-            eprintln!("Only one toplevel is supported; closing additional window");
-            surface.send_close();
-            return;
-        }
         surface.with_pending_state(|state| {
-            state.size = Some((self.size.width as i32, self.size.height as i32).into());
-            state.states.set(xdg_toplevel::State::Activated);
+            state.size = Some(
+                (
+                    self.initial_size.width as i32,
+                    self.initial_size.height as i32,
+                )
+                    .into(),
+            );
+            if self.selected.is_none() {
+                state.states.set(xdg_toplevel::State::Activated);
+            }
             state.states.set(xdg_toplevel::State::Maximized);
         });
         surface.send_configure();
-        self.window = Some(Window::new_wayland_window(surface));
+        let window = Window::new_wayland_window(surface.clone());
+        if self.register_window(window, self.initial_size).is_none() {
+            surface.send_close();
+        }
         self.dirty = true;
     }
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        if self.root().as_ref() == Some(surface.wl_surface()) {
-            self.release_input();
-            self.window = None;
-            self.dirty = true;
+        if let Some(id) = self
+            .windows
+            .iter()
+            .find(|(_, entry)| {
+                entry
+                    .window
+                    .toplevel()
+                    .is_some_and(|top| top.wl_surface() == surface.wl_surface())
+            })
+            .map(|(id, _)| *id)
+        {
+            self.remove_window(id);
         }
+        self.dirty = true;
     }
+    fn title_changed(&mut self, _: ToplevelSurface) {
+        self.scene_dirty = true;
+    }
+    fn parent_changed(&mut self, _: ToplevelSurface) {
+        self.scene_dirty = true;
+    }
+
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         surface.with_pending_state(|state| {
             state.geometry = positioner.get_unconstrained_geometry(Rectangle::from_size(
@@ -547,7 +929,10 @@ impl XdgShellHandler for SingleWindow {
     fn grab(&mut self, surface: PopupSurface, _: wl_seat::WlSeat, serial: Serial) {
         if let Some(root) = self.root() {
             let seat = self.seat.clone();
-            if let Ok(grab) = self.popups.grab_popup(root, surface.into(), &seat, serial) {
+            if let Ok(grab) = self
+                .popups
+                .grab_popup(root.into(), surface.into(), &seat, serial)
+            {
                 seat.get_keyboard()
                     .unwrap()
                     .set_grab(self, PopupKeyboardGrab::new(&grab), serial);
@@ -595,3 +980,50 @@ smithay::delegate_xdg_decoration!(SingleWindow);
 smithay::delegate_seat!(SingleWindow);
 smithay::delegate_data_device!(SingleWindow);
 smithay::delegate_output!(SingleWindow);
+
+#[cfg(feature = "gpu")]
+impl SingleWindow {
+    pub fn advertise_gpu(&mut self, engine: &RenderEngine) -> Result<(), Box<dyn Error>> {
+        use smithay::backend::{
+            egl::EGLContext,
+            renderer::{gles::GlesRenderer, ImportDma},
+        };
+        if let RenderEngine::Gl(renderer, _) = engine {
+            let context =
+                EGLContext::new_shared(renderer.egl_context().display(), renderer.egl_context())?;
+            // SAFETY: shared context is created and used only on this compositor thread.
+            self.import_renderer = Some(unsafe { GlesRenderer::new(context) }?);
+            let formats = renderer.dmabuf_formats();
+            if formats.iter().next().is_some() {
+                self.dmabuf_state
+                    .create_global::<Self>(&self.display, formats.iter().copied());
+            }
+        }
+        Ok(())
+    }
+}
+#[cfg(feature = "gpu")]
+impl smithay::wayland::dmabuf::DmabufHandler for SingleWindow {
+    fn dmabuf_state(&mut self) -> &mut smithay::wayland::dmabuf::DmabufState {
+        &mut self.dmabuf_state
+    }
+    fn dmabuf_imported(
+        &mut self,
+        _: &smithay::wayland::dmabuf::DmabufGlobal,
+        buffer: smithay::backend::allocator::dmabuf::Dmabuf,
+        notifier: smithay::wayland::dmabuf::ImportNotifier,
+    ) {
+        use smithay::backend::renderer::ImportDma;
+        if self
+            .import_renderer
+            .as_mut()
+            .is_some_and(|renderer| renderer.import_dmabuf(&buffer, None).is_ok())
+        {
+            let _ = notifier.successful::<Self>();
+        } else {
+            notifier.failed();
+        }
+    }
+}
+#[cfg(feature = "gpu")]
+smithay::delegate_dmabuf!(SingleWindow);

@@ -222,3 +222,28 @@ mod resize_tests {
         assert_eq!(tracker.observe((0, 0), now + Duration::from_secs(1)), None);
     }
 }
+
+pub fn attach_parent(child: &Window, parent: Option<&Window>) {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn waytransfer_window_parent(
+                child: *mut std::ffi::c_void,
+                parent: *mut std::ffi::c_void,
+            );
+        }
+        // SAFETY: both pointers reference live minifb NSWindows on the UI thread.
+        unsafe {
+            waytransfer_window_parent(
+                child.get_window_handle(),
+                parent
+                    .map(Window::get_window_handle)
+                    .unwrap_or(std::ptr::null_mut()),
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (child, parent);
+    }
+}

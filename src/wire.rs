@@ -1,5 +1,5 @@
-//! Protocol v4: length-prefixed binary messages; see PROTOCOL.md for byte layout.
-use crate::{invalid, Dimensions, Message, Tile, MAX_DIMENSION, MAX_PACKET, TILE};
+//! Protocol v5: length-prefixed binary messages; see PROTOCOL.md for byte layout.
+use crate::{invalid, Dimensions, Message, Tile, MAX_DIMENSION, MAX_PACKET, MAX_TITLE_BYTES, TILE};
 use std::io::{self, Read, Write};
 
 fn tile_limit(size: Dimensions, x: usize, y: usize) -> io::Result<usize> {
@@ -35,9 +35,49 @@ fn put_size(out: &mut Vec<u8>, size: Dimensions) -> io::Result<()> {
     Ok(())
 }
 /// Validate and encode completely before emitting any bytes to the stream.
-pub fn write_message(mut writer: impl Write, message: &Message) -> io::Result<usize> {
+fn body(message: &Message, envelope: bool) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     match message {
+        Message::WindowInfo {
+            id,
+            parent,
+            size,
+            title,
+        } => {
+            if !envelope
+                || *id == 0
+                || *parent == Some(0)
+                || *parent == Some(*id)
+                || title.len() > MAX_TITLE_BYTES
+                || title.chars().any(|c| c.is_control())
+            {
+                return Err(invalid("invalid window metadata"));
+            }
+            out.push(9);
+            out.extend(id.to_be_bytes());
+            out.extend(parent.unwrap_or(0).to_be_bytes());
+            put_size(&mut out, *size)?;
+            out.extend((title.len() as u16).to_be_bytes());
+            out.extend(title.as_bytes());
+        }
+        Message::WindowGone { id } => {
+            if !envelope || *id == 0 {
+                return Err(invalid("invalid window id"));
+            }
+            out.push(10);
+            out.extend(id.to_be_bytes());
+        }
+        Message::ForWindow { id, message } => {
+            if !envelope || *id == 0 || matches!(message.as_ref(), Message::Hello { .. }) {
+                return Err(invalid("invalid window envelope"));
+            }
+            out.push(11);
+            out.extend(id.to_be_bytes());
+            out.extend(body(message, false)?);
+        }
+        Message::Close => {
+            out.push(12);
+        }
         Message::Hello { version } => {
             out.push(1);
             out.extend(version.to_be_bytes());
@@ -106,6 +146,10 @@ pub fn write_message(mut writer: impl Write, message: &Message) -> io::Result<us
     if out.len() > MAX_PACKET {
         return Err(invalid("packet too large"));
     }
+    Ok(out)
+}
+pub fn write_message(mut writer: impl Write, message: &Message) -> io::Result<usize> {
+    let out = body(message, true)?;
     writer.write_all(&(out.len() as u32).to_be_bytes())?;
     writer.write_all(&out)?;
     Ok(out.len() + 4)
@@ -130,6 +174,9 @@ impl<'a> Cursor<'a> {
     }
     fn i16(&mut self) -> io::Result<i16> {
         Ok(i16::from_be_bytes(self.take(2)?.try_into().unwrap()))
+    }
+    fn u32(&mut self) -> io::Result<u32> {
+        Ok(u32::from_be_bytes(self.take(4)?.try_into().unwrap()))
     }
     fn u64(&mut self) -> io::Result<u64> {
         Ok(u64::from_be_bytes(self.take(8)?.try_into().unwrap()))
@@ -159,7 +206,58 @@ pub fn read_message_limit(mut reader: impl Read, limit: usize) -> io::Result<Mes
     let mut bytes = vec![0; len];
     reader.read_exact(&mut bytes)?;
     let mut cursor = Cursor { bytes: &bytes };
+    let message = parse(&mut cursor, true)?;
+    if !cursor.bytes.is_empty() {
+        return Err(invalid("trailing bytes"));
+    }
+    Ok(message)
+}
+
+fn parse(cursor: &mut Cursor<'_>, envelope: bool) -> io::Result<Message> {
     let message = match cursor.u8()? {
+        9 if envelope => {
+            let id = cursor.u32()?;
+            let parent = cursor.u32()?;
+            let size = cursor.size()?;
+            let len = cursor.u16()? as usize;
+            if id == 0 || parent == id || len > MAX_TITLE_BYTES {
+                return Err(invalid("invalid window metadata"));
+            }
+            let title = std::str::from_utf8(cursor.take(len)?)
+                .map_err(|_| invalid("invalid title UTF-8"))?
+                .to_string();
+            if title.chars().any(|c| c.is_control()) {
+                return Err(invalid("invalid title"));
+            }
+            Message::WindowInfo {
+                id,
+                parent: if parent == 0 { None } else { Some(parent) },
+                size,
+                title,
+            }
+        }
+        10 if envelope => {
+            let id = cursor.u32()?;
+            if id == 0 {
+                return Err(invalid("invalid window id"));
+            }
+            Message::WindowGone { id }
+        }
+        11 if envelope => {
+            let id = cursor.u32()?;
+            if id == 0 {
+                return Err(invalid("invalid window id"));
+            }
+            let message = parse(cursor, false)?;
+            if matches!(message, Message::Hello { .. }) {
+                return Err(invalid("hello in window envelope"));
+            }
+            Message::ForWindow {
+                id,
+                message: Box::new(message),
+            }
+        }
+        12 => Message::Close,
         1 => Message::Hello {
             version: cursor.u16()?,
         },
@@ -242,8 +340,5 @@ pub fn read_message_limit(mut reader: impl Read, limit: usize) -> io::Result<Mes
         }
         _ => return Err(invalid("unknown message tag")),
     };
-    if !cursor.bytes.is_empty() {
-        return Err(invalid("trailing bytes"));
-    }
     Ok(message)
 }

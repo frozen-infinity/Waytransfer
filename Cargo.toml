@@ -9,6 +9,8 @@ description = "Experimental low-bandwidth remote display transport"
 default = []
 viewer = ["dep:minifb"]
 compositor = ["dep:smithay", "dep:ctrlc"]
+x11 = ["compositor", "smithay/xwayland"]
+gpu = ["compositor", "smithay/renderer_gl", "smithay/use_system_lib"]
 
 [dependencies]
 lz4_flex = "0.13"

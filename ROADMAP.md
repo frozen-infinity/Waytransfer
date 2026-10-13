@@ -1,38 +1,33 @@
 # Roadmap
 
-Delivered:
+Delivered (experimental):
 
-- Synthetic remote-display transport, dirty tiles and lossless LZ4.
-- Experimental headless Linux compositor: one xdg-shell application window,
-  wl_shm software buffers, configurable/resizable virtual output and surface composition.
-- Native Mac viewer with pointer/buttons/scroll and basic US physical keyboard.
-- Background transport, bounded queues, raw-frame coalescing and full reconnect.
-- Dimension-bearing reset frames, debounced Mac resizing and bounded resolution.
-- Compact binary framing with measured reductions in synthetic wire bytes, golden
-  protocol fixtures, malformed-packet tests and reduced packet allocation limits.
-- Shared transport tests, independent Wayland-client integration test and a real
-  weston-terminal smoke test in Linux CI.
+- Rust lossless tile/LZ4 transport, idle suppression, compact binary framing,
+  bounded queues, latest-scene coalescing and complete reconnect/reset frames.
+- Headless Smithay session with multiple Wayland toplevels, independent native Mac
+  windows, titles, focus, close, debounced resizing and basic transient parents.
+- Software Pixman composition, optional EGL/GLES composition and driver-supported
+  DMA-BUF import; optional rootless XWayland with per-window input/focus.
+- Shared transport tests, independent Wayland client tests and actual application
+  smoke tests. See VALIDATION.md for verified paths and outstanding hardware checks.
 
 Next:
 
-1. **One-window usability:** window title and lifecycle metadata, HiDPI, remote
-   cursor shapes, keyboard layout
-   selection and IME. Expand popup/subsurface tests and test common GTK/Qt apps.
-2. **GPU and legacy applications:** EGL/DMA-BUF capture/rendering path and XWayland
-   support. Benchmark software and GPU paths with terminals and IDEs before claims.
-3. **Bandwidth:** scroll/copy detection, bounded tile cache,
-   configurable refresh budget, realistic editor workloads, input-to-display latency
-   under constrained bandwidth and RTT. Fuzz decoders and bound Wayland resources.
-4. **Multiwindow:** native Mac windows per Linux toplevel, transient dialogs,
-   independent framebuffers, focus/stacking and clipboard. Keep dragging and Mac
-   window decorations local. Do this after single-window compatibility is reliable.
+1. **Compatibility:** physical GPU/driver matrix (including NVIDIA), Kitty and IDEs,
+   GPU-backed X11/GLX, GTK/Qt dialogs, popup/subsurface geometry, X11 stacking and
+   override-redirect behavior. Reconnect tests with real apps and many windows.
+2. **Window usability:** HiDPI, remote cursors, clipboard, keyboard layouts and IME;
+   native session controls and clean process supervision.
+3. **Bandwidth:** scroll/copy detection, bounded tile cache, configurable refresh
+   budget, realistic editor workloads, measured input latency on constrained links.
+   Fuzz decoders and bound client-side Wayland resources.
+4. **Whole Hyprland mode:** a separate desktop/output stream, initially from a
+   nested Hyprland session or a supported capture/input integration. Preserve the
+   full desktop, workspace animations, panels and compositor shortcuts in one Mac
+   viewport. Choose and validate the capture/control APIs before implementation;
+   the per-application session here does not host Hyprland or capture an existing one.
 5. **Rendering on Mac:** measured GPU presentation and optional semantic/vector
-   operations for cooperating applications/toolkits. Ordinary Wayland clients submit
-   rendered buffers; Wayland forwarding alone cannot expose their drawing commands.
-6. **Harden/release:** authenticated encrypted transport, session authorization,
-   client/resource limits, reconnect lifecycle, process supervision, packaging,
-   compatibility matrix and release artifacts.
-
-Current code hosts applications in a separate session. It does not capture the
-existing desktop, support a whole desktop environment, or replace the Linux display
-manager. Multiwindow and accelerated-client support are not delivered yet.
+   operations for cooperating toolkits. Ordinary Wayland clients submit rendered
+   buffers; forwarding Wayland cannot expose their drawing commands.
+6. **Release:** authenticated encrypted transport, authorization, resource hardening,
+   packaging, compatibility matrix and release artifacts.

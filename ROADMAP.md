@@ -27,7 +27,7 @@ Next:
    budget, realistic editor workloads, measured input latency on constrained links.
    Fuzz decoders and bound client-side Wayland resources.
 4. **Desktop mode:** validate nested Hyprland 0.56 on physical OMEN/GPU drivers,
-   including NVIDIA, with real Lua configs. Add compositor resolution negotiation,
+   including NVIDIA, with real Lua configs and the private Smithay parent. Add compositor resolution negotiation,
    cursor images, multiple outputs and newer image-copy capture APIs. Measure busy
    desktop bandwidth and CPU cost, and improve launcher/process lifecycle handling.
 5. **Rendering on Mac:** measured GPU presentation and optional semantic/vector

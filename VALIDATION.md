@@ -199,8 +199,8 @@ parent connection, disabled physical-seat access, argument passing, cleanup on
 normal exit and startup failure. CI also checks shell syntax/ShellCheck and Lua
 syntax. Those process fixtures do not run Hyprland.
 
-The launcher targets Hyprland 0.56.0's Lua API and uses a GPU-backed private headless
-Sway parent for Aquamarine's Wayland allocator. API/backend assumptions were checked
+The launcher targets Hyprland 0.56.0's Lua API and uses Waytransfer's GPU-backed private Smithay
+parent for Aquamarine's Wayland allocator. API/backend assumptions were checked
 against upstream [Hyprland 0.56 source](https://github.com/hyprwm/Hyprland/tree/v0.56.0)
 and [Aquamarine backend sources](https://github.com/hyprwm/aquamarine/tree/main/src/backend).
 Actual nested Hyprland, physical DMA-BUF/GPU drivers (especially NVIDIA), custom
@@ -209,3 +209,21 @@ been validated in this environment. The real Sway test establishes the capture,
 virtual-input and transport path; it does not establish that every Hyprland/GPU
 combination can launch. Keep the supplied separate config for the first hardware
 check before introducing personal startup scripts or services.
+
+### Hyprland parent compatibility correction
+
+The user's OMEN run exposed two launcher defects: stock Sway advertises xdg-shell
+v5, while Aquamarine binds v6, and the long private runtime overflowed Hyprland's
+IPC Unix socket path. The launcher now starts Waytransfer's GPU compositor with
+`--nested-parent` (no TCP listener/readback), using short private runtimes.
+Real Wayland fixtures bind wl_compositor v6, xdg-shell v6 and wl_seat v9 and verify
+configure/frame callbacks on the no-readback parent path. Mode-1/normal-transform
+preferences are supplied to v6 surfaces. On actual EGL render-node hardware, the
+GPU compositor advertises DMA-BUF v4 feedback; software EGL retains ordinary v3
+imports but is rejected for nested Hyprland before startup.
+
+Launcher fixtures check a worst-case 40-character commit/timestamp/random IPC
+suffix below the Linux 108-byte limit, long runtime fallback and cleanup. These
+fixtures do not provide GPU feedback or run Hyprland. Physical GPU allocator and
+nested Hyprland remain hardware checks; the fix removes the demonstrated protocol
+mismatch and path overflow without patching system libraries.

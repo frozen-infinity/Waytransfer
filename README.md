@@ -208,18 +208,22 @@ The existing per-application mode still opens independent native Mac windows.
 On the OMEN, build this branch and install the private-display dependencies:
 
 ```sh
-sudo pacman -S --needed sway kitty libxkbcommon xkeyboard-config pkgconf
-cargo build --release --features desktop --bin desktop
+sudo pacman -S --needed kitty libxkbcommon xkeyboard-config pkgconf pixman wayland libglvnd
+cargo build --release --features desktop,gpu --bin desktop --bin compositor
 mkdir -p ~/.config/waytransfer
 cp examples/headless-hyprland.lua ~/.config/waytransfer/headless.lua
 ./scripts/headless-hyprland.sh --config ~/.config/waytransfer/headless.lua
 ```
 
 Run this inside a persistent terminal (for example tmux) when connecting over SSH.
-The launcher starts a private GPU-backed headless Sway display, then a nested
-Hyprland session. Hyprland 0.56 needs that parent for its rendering allocator;
+The launcher starts Waytransfer's private GPU compositor as a parent, then a nested
+Hyprland session. It supplies xdg-shell v6, wl_compositor v6, wl_seat v9 and
+DMA-BUF v4 render-node feedback. Stock Sway advertises xdg-shell v5 and is
+incompatible with Aquamarine's v6 bind. Hyprland 0.56 needs the compatible parent
+for its rendering allocator;
 this is not a standalone software-only Hyprland backend. GPU render-node access
-is required. The launcher disables Hyprland's physical DRM/seat acquisition and
+is required. Software-only EGL is rejected with an explicit error. The parent
+has no TCP viewer listener and does not copy its frames to CPU memory. The launcher disables Hyprland's physical DRM/seat acquisition and
 uses private sockets, so it can run alongside your ordinary desktop.
 
 Start with the supplied Lua file, then customize that **separate copy**. Its Alt+Enter
@@ -268,6 +272,9 @@ cargo run --release --features desktop --bin desktop -- --output OUTPUT_NAME --v
 Direct attachment uses the current `WAYLAND_DISPLAY`; select it deliberately.
 Capture requires `wlr-screencopy`, SHM buffers and permission; control additionally
 requires output-bound `wlr-virtual-pointer` v2 and `zwp-virtual-keyboard` v1.
+The launcher uses short private runtime paths (falling back to a mode-0700
+directory under `/tmp` when necessary) so Hyprland's commit/instance suffix fits
+Unix socket limits. `--parent PATH` selects the matching GPU compositor binary.
 View-only mode does not create input devices. Unsupported formats/protocols or
 capture denial produce errors. See [VALIDATION.md](VALIDATION.md): real Sway
 capture/input is tested in CI, while the nested Hyprland launcher still needs

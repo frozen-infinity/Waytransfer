@@ -344,6 +344,17 @@ impl SingleWindow {
                         top.send_pending_configure();
                     }
                 }
+                #[cfg(feature = "x11")]
+                if let (Some(surface), Some(xwm)) =
+                    (self.windows[&id].window.x11_surface(), self.xwm.as_mut())
+                {
+                    // XWayland also hit-tests the X11 stack. Native Mac windows
+                    // can overlap at the same remote origin, so raise the focused
+                    // X11 window before clicks reach it rather than its sibling.
+                    if let Err(error) = xwm.raise_window(surface) {
+                        eprintln!("X11 focus stacking: {error}");
+                    }
+                }
                 self.scene_dirty = true;
                 self.input(Message::Focus { active: true })
             }

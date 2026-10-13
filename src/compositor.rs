@@ -28,7 +28,7 @@ use smithay::{
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_buffer, wl_seat, wl_surface::WlSurface},
-            Client, Display, DisplayHandle,
+            Client, Display, DisplayHandle, Resource,
         },
     },
     utils::{Rectangle, Serial, Transform, SERIAL_COUNTER},
@@ -141,7 +141,9 @@ impl SingleWindow {
         display: &DisplayHandle,
         stream: std::os::unix::net::UnixStream,
     ) -> std::io::Result<Client> {
-        display.insert_client(stream, Arc::new(ClientState::default()))
+        display
+            .clone()
+            .insert_client(stream, Arc::new(ClientState::default()))
     }
     fn root(&self) -> Option<WlSurface> {
         self.window
@@ -341,7 +343,7 @@ impl SingleWindow {
             .map(|w| {
                 w.render_elements(
                     renderer,
-                    (-w.geometry().loc).to_physical(1),
+                    (-w.geometry().loc.x, -w.geometry().loc.y).into(),
                     1.0.into(),
                     1.0,
                 )

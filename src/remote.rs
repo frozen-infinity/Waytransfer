@@ -56,6 +56,8 @@ impl RemoteServer {
                 };
                 *worker_shared.stream.lock().unwrap() = stream.try_clone().ok();
                 let result = (|| -> io::Result<()> {
+                    // BSD/macOS can inherit the listener's nonblocking flag.
+                    stream.set_nonblocking(false)?;
                     handshake(&mut stream)?;
                     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
                     let connected = Arc::new(AtomicBool::new(true));

@@ -205,12 +205,14 @@ impl SingleWindow {
     pub(crate) fn window_entries(&self) -> impl Iterator<Item = (u32, &Window)> {
         self.windows.iter().map(|(id, entry)| (*id, &entry.window))
     }
+    #[cfg(feature = "x11")]
     pub(crate) fn mark_all_dirty(&mut self) {
         for entry in self.windows.values_mut() {
             entry.dirty = true;
         }
         self.scene_dirty = true;
     }
+    #[cfg(feature = "x11")]
     pub(crate) fn mark_metadata_dirty(&mut self) {
         self.scene_dirty = true;
     }

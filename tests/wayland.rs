@@ -599,17 +599,17 @@ fn multiwindow_roundtrip(gpu: bool) {
         .find(|(_, window)| window.title == "App 1")
         .unwrap()
         .0;
-    assert_eq!(
-        scene.windows[&first].decoder.pixels,
-        App::default().pixels()
+    assert_pixels(
+        &scene.windows[&first].decoder.pixels,
+        &App::default().pixels(),
     );
-    assert_eq!(
-        scene.windows[&second].decoder.pixels,
-        App {
+    assert_pixels(
+        &scene.windows[&second].decoder.pixels,
+        &App {
             color: 0x405060,
             ..Default::default()
         }
-        .pixels()
+        .pixels(),
     );
     let send = |viewer: &mut TcpStream, id, message| {
         write_message(
@@ -655,4 +655,20 @@ fn multiwindow_roundtrip(gpu: bool) {
         client.join().unwrap();
     }
     drop(receivers);
+}
+
+fn assert_pixels(actual: &[u32], expected: &[u32]) {
+    assert_eq!(actual.len(), expected.len());
+    let mismatches: Vec<_> = actual
+        .iter()
+        .zip(expected)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .take(12)
+        .map(|(index, (a, b))| (index, format!("{a:06x}"), format!("{b:06x}")))
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "pixel differences (index, actual, expected): {mismatches:?}"
+    );
 }

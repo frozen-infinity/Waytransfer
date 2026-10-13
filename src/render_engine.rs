@@ -15,7 +15,7 @@ use smithay::{
             element::{surface::WaylandSurfaceRenderElement, AsRenderElements},
             pixman::PixmanRenderer,
             utils::draw_render_elements,
-            Bind, Color32F, ExportMem, Frame, ImportAll, Offscreen, Renderer, TextureMapping,
+            Bind, Color32F, ExportMem, Frame, ImportAll, Offscreen, Renderer,
         },
     },
     desktop::Window,
@@ -130,22 +130,15 @@ where
         Rectangle::from_size((size.width as i32, size.height as i32).into()),
         Fourcc::Argb8888,
     )?;
-    let flipped = mapping.flipped();
     let bytes = renderer.map_texture(&mapping)?;
-    let mut pixels: Vec<_> = bytes
+    // Smithay renders a Normal offscreen target with logical row zero at GL
+    // readback row zero. Mapping::flipped describes texture sampling, not a
+    // second row reversal for this rendered framebuffer.
+    let pixels: Vec<_> = bytes
         .as_chunks::<4>()
         .0
         .iter()
         .map(|pixel| u32::from_ne_bytes(*pixel) & 0xffffff)
         .collect();
-    if flipped {
-        let width = size.width as usize;
-        for y in 0..size.height as usize / 2 {
-            let opposite = size.height as usize - 1 - y;
-            for x in 0..width {
-                pixels.swap(y * width + x, opposite * width + x);
-            }
-        }
-    }
     Ok(pixels)
 }

@@ -1,4 +1,4 @@
-//! Protocol v4: length-prefixed binary messages; see PROTOCOL.md for byte layout.
+//! Protocol v5: length-prefixed binary messages; see PROTOCOL.md for byte layout.
 use crate::{invalid, Dimensions, Message, Tile, MAX_DIMENSION, MAX_PACKET, MAX_TITLE_BYTES, TILE};
 use std::io::{self, Read, Write};
 

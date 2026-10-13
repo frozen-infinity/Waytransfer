@@ -94,3 +94,23 @@ fn scene_and_envelope_limits() {
     assert_eq!(window_title("hello\0world\n"), "helloworld");
     assert!(window_title(&"é".repeat(400)).len() <= MAX_TITLE_BYTES);
 }
+
+#[test]
+fn cyclic_parents_and_mixed_streams_are_rejected() {
+    let metadata = |id, parent| Message::WindowInfo {
+        id,
+        parent,
+        size: Dimensions::new(1, 1).unwrap(),
+        title: "Window".into(),
+    };
+    let mut scene = ClientScene::default();
+    scene.apply(metadata(1, Some(2))).unwrap();
+    assert!(scene.apply(metadata(2, Some(1))).is_err());
+    assert_eq!(scene.windows.len(), 1);
+    let mut scene = ClientScene::default();
+    let mut encoder = Encoder::default();
+    scene
+        .apply(encoder.encode(&demo_frame(10, 10, false)).unwrap().unwrap())
+        .unwrap();
+    assert!(scene.apply(metadata(2, None)).is_err());
+}

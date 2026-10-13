@@ -31,8 +31,19 @@ impl ClientScene {
                 title,
             } => {
                 size.validate()?;
+                if !self.multi && !self.windows.is_empty() {
+                    return Err(invalid("mixed demo and window-scoped stream"));
+                }
                 if id == 0 || parent == Some(id) || parent == Some(0) {
                     return Err(invalid("invalid window identity"));
+                }
+                let mut ancestor = parent;
+                let mut visited = BTreeSet::from([id]);
+                while let Some(next) = ancestor {
+                    if !visited.insert(next) {
+                        return Err(invalid("cyclic window parent"));
+                    }
+                    ancestor = self.windows.get(&next).and_then(|window| window.parent);
                 }
                 let total: usize = self
                     .windows

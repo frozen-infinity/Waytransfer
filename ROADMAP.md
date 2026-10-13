@@ -4,16 +4,17 @@ Delivered:
 
 - Synthetic remote-display transport, dirty tiles and lossless LZ4.
 - Experimental headless Linux compositor: one xdg-shell application window,
-  wl_shm software buffers, fixed 640×400 virtual output and surface composition.
+  wl_shm software buffers, configurable/resizable virtual output and surface composition.
 - Native Mac viewer with pointer/buttons/scroll and basic US physical keyboard.
 - Background transport, bounded queues, raw-frame coalescing and full reconnect.
+- Dimension-bearing reset frames, debounced Mac resizing and bounded resolution.
 - Shared transport tests, independent Wayland-client integration test and a real
   weston-terminal smoke test in Linux CI.
 
 Next:
 
-1. **One-window usability:** configurable/negotiated dimensions, resize/reset,
-   window title and lifecycle metadata, HiDPI, remote cursor shapes, keyboard layout
+1. **One-window usability:** window title and lifecycle metadata, HiDPI, remote
+   cursor shapes, keyboard layout
    selection and IME. Expand popup/subsurface tests and test common GTK/Qt apps.
 2. **GPU and legacy applications:** EGL/DMA-BUF capture/rendering path and XWayland
    support. Benchmark software and GPU paths with terminals and IDEs before claims.

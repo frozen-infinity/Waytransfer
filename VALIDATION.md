@@ -58,3 +58,23 @@ cargo run --features viewer --bin viewer -- 127.0.0.1:17879
 Click inside the viewer, press and release A, then switch to another application.
 The probe reports PASS when it receives all expected events; it times out after
 five minutes. This is a manual GUI check, not automatically run by headless CI.
+
+## Resizable one-window mode (protocol v3)
+
+Shared tests cover grow/shrink and equal-area shape changes, exact reconstruction,
+partial edge tiles, malformed reset atomicity, size/pixel limits, 150 ms debounce,
+stretched-window pointer mapping and reconnection after coalesced size changes.
+An incompressible 1920×1080 round trip verifies that a legal full frame fits the
+40 MiB JSON packet ceiling. Input packets retain the separate 4 KiB limit.
+
+Linux Wayland tests resize to 801×503 and 351×227, wait for the client's actual
+resized pixels (not just the compositor's new canvas), and verify pointer clicks
+beyond the original 640×400 area. The real weston-terminal test starts with an
+803×509 canvas, resizes to 961×607 and executes remote commands before/after resize.
+See the PR's CI results for final Linux/macOS verification.
+
+Manual Apple Silicon native-window check passed: the actual viewer's zoom control
+requested 1710×967, a new-size frame was delivered to the viewer, and A press/release reached
+the sender afterward. Repeat with `cargo run --example input_probe -- --resize`,
+connect the viewer to 127.0.0.1:17879, resize/zoom, then press and release A.
+The physical OMEN/Mac application resize still requires the user's hardware check.

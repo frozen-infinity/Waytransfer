@@ -108,6 +108,7 @@ pub struct SingleWindow {
     pub output: Output,
     window: Option<Window>,
     size: Dimensions,
+    initial_size: Dimensions,
     popups: PopupManager,
     dirty: bool,
     start: Instant,
@@ -182,6 +183,7 @@ impl SingleWindow {
             output,
             window: None,
             size,
+            initial_size: size,
             popups: PopupManager::default(),
             dirty: true,
             start: Instant::now(),
@@ -724,7 +726,14 @@ impl CompositorHandler for SingleWindow {
         &mut self.compositor
     }
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client.get_data::<ClientState>().unwrap().compositor_state
+        if let Some(data) = client.get_data::<ClientState>() {
+            return &data.compositor_state;
+        }
+        #[cfg(feature = "x11")]
+        if let Some(data) = client.get_data::<smithay::xwayland::XWaylandClientData>() {
+            return &data.compositor_state;
+        }
+        panic!("client has no compositor state")
     }
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
@@ -736,7 +745,13 @@ impl CompositorHandler for SingleWindow {
                 Rectangle::from_size((self.size.width as i32, self.size.height as i32).into()),
             );
         }
-        for entry in self.windows.values_mut() {
+        let mut total: usize = self
+            .windows
+            .values()
+            .map(|entry| entry.size.pixel_count())
+            .sum();
+        for (&id, entry) in &mut self.windows {
+            entry.window.on_commit();
             let mut matches = false;
             entry.window.with_surfaces(|candidate, _| {
                 if candidate == surface {
@@ -745,6 +760,28 @@ impl CompositorHandler for SingleWindow {
             });
             if matches {
                 entry.dirty = true;
+                entry.window.output_enter(
+                    &self.output,
+                    Rectangle::from_size(
+                        (entry.size.width as i32, entry.size.height as i32).into(),
+                    ),
+                );
+                let geometry = entry.window.geometry();
+                if geometry.size.w > 0 && geometry.size.h > 0 {
+                    if let Ok(actual) =
+                        Dimensions::new(geometry.size.w as usize, geometry.size.h as usize)
+                    {
+                        if total - entry.size.pixel_count() + actual.pixel_count()
+                            <= MAX_SCENE_PIXELS
+                        {
+                            total = total - entry.size.pixel_count() + actual.pixel_count();
+                            entry.size = actual;
+                            if self.selected == Some(id) {
+                                self.size = actual;
+                            }
+                        }
+                    }
+                }
             }
         }
         self.dirty = true;
@@ -791,13 +828,21 @@ impl XdgShellHandler for SingleWindow {
     }
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         surface.with_pending_state(|state| {
-            state.size = Some((self.size.width as i32, self.size.height as i32).into());
-            state.states.set(xdg_toplevel::State::Activated);
+            state.size = Some(
+                (
+                    self.initial_size.width as i32,
+                    self.initial_size.height as i32,
+                )
+                    .into(),
+            );
+            if self.selected.is_none() {
+                state.states.set(xdg_toplevel::State::Activated);
+            }
             state.states.set(xdg_toplevel::State::Maximized);
         });
         surface.send_configure();
         let window = Window::new_wayland_window(surface.clone());
-        if self.register_window(window, self.size).is_none() {
+        if self.register_window(window, self.initial_size).is_none() {
             surface.send_close();
         }
         self.dirty = true;
@@ -903,7 +948,7 @@ impl SingleWindow {
             // SAFETY: shared context is created and used only on this compositor thread.
             self.import_renderer = Some(unsafe { GlesRenderer::new(context) }?);
             let formats = renderer.dmabuf_formats();
-            if !formats.is_empty() {
+            if formats.iter().next().is_some() {
                 self.dmabuf_state
                     .create_global::<Self>(&self.display, formats.iter().copied());
             }

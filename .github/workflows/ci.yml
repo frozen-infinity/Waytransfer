@@ -45,6 +45,7 @@ jobs:
       - name: Check optional Linux backend combinations
         if: runner.os == 'Linux'
         run: |
+          cargo test --locked --features desktop --test desktop_io
           cargo clippy --locked --lib --bins --features desktop -- -D warnings
           cargo clippy --locked --lib --bins --features compositor -- -D warnings
           cargo clippy --locked --lib --bins --features compositor,x11 -- -D warnings

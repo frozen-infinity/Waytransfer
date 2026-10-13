@@ -20,7 +20,17 @@ jobs:
           components: rustfmt, clippy
       - name: Linux viewer dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev libpixman-1-dev weston xwayland xterm x11-utils libegl1-mesa-dev libgles2-mesa-dev mesa-utils-extra
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev libpixman-1-dev weston xwayland xterm x11-utils libegl1-mesa-dev libgles2-mesa-dev mesa-utils-extra libgtk-3-0 libvulkan1 fonts-dejavu-core
+      - name: Install pinned JetBrains Runtime for real Java compatibility tests
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/jbrsdk-25.0.4-linux-x64-b508.27.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.4-linux-x64-b508.27.tar.gz
+          echo "380200957c181c1d97b3a2e9ba2aacc32eb179b22d1c75bfd9a1a7fafd785f229339f382345cbad4bef461ac6adcfb7ee0f846837685c2fa55abee5b6b35f9bd  $archive" | sha512sum --check
+          mkdir -p "$RUNNER_TEMP/waytransfer-jbr"
+          tar -xzf "$archive" --strip-components=1 -C "$RUNNER_TEMP/waytransfer-jbr"
+          echo "WAYTRANSFER_TEST_JBR=$RUNNER_TEMP/waytransfer-jbr" >> "$GITHUB_ENV"
       - run: cargo fmt --check
       - run: cargo test --locked --all-features
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings

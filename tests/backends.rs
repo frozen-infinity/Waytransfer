@@ -202,3 +202,146 @@ fn actual_egl_application_produces_changing_frames() {
         .iter()
         .any(|pixel| *pixel != scene.windows[&id].decoder.pixels[0]));
 }
+
+#[test]
+fn jetbrains_wayland_swing_windows_render_type_resize_and_close() {
+    if let Some(jbr) = std::env::var_os("WAYTRANSFER_TEST_JBR") {
+        java_roundtrip(&jbr, &["--app-backend", "wayland"], "WLToolkit");
+    }
+}
+#[cfg(feature = "x11")]
+#[test]
+fn jetbrains_x11_fallback_windows_render_type_resize_and_close() {
+    if let Some(jbr) = std::env::var_os("WAYTRANSFER_TEST_JBR") {
+        java_roundtrip(&jbr, &["--x11", "--app-backend", "x11"], "XToolkit");
+    }
+}
+fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
+    let classes = tempfile::tempdir().unwrap();
+    let sdk = std::path::Path::new(jbr);
+    let compile = Command::new(sdk.join("bin/javac"))
+        .arg("-d")
+        .arg(classes.path())
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/WaytransferSwingProbe.java"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        compile.status.success(),
+        "javac: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let mut args = vec!["-Djava.awt.headless=false"];
+    // Native mode is tested explicitly; X11 mode must be selected by the launcher
+    // profile itself, not hidden by supplying -Dawt.toolkit.name here.
+    if toolkit == "WLToolkit" {
+        args.push("-Dawt.toolkit.name=WLToolkit");
+    }
+    args.extend([
+        "-cp",
+        classes.path().to_str().unwrap(),
+        "WaytransferSwingProbe",
+        toolkit,
+    ]);
+    let (session, mut viewer) = start(flags, sdk.join("bin/java").to_str().unwrap(), &args);
+    let mut scene = ClientScene::default();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (main, dialog) = loop {
+        assert!(
+            Instant::now() < deadline,
+            "Java windows missing: {}",
+            session.log()
+        );
+        let find = |title: &str| {
+            scene
+                .windows
+                .iter()
+                .find(|(_, window)| window.ready && window.title == title)
+                .map(|(id, _)| *id)
+        };
+        if let (Some(main), Some(dialog)) = (
+            find("Waytransfer Java main"),
+            find("Waytransfer Java dialog"),
+        ) {
+            break (main, dialog);
+        }
+        receive(&mut viewer, &mut scene, &session);
+    };
+    assert!(session.log().contains(toolkit), "{}", session.log());
+    assert_eq!(scene.windows[&dialog].parent, Some(main));
+    let send = |viewer: &mut TcpStream, id, message| {
+        write_message(
+            viewer,
+            &Message::ForWindow {
+                id,
+                message: Box::new(message),
+            },
+        )
+        .unwrap();
+    };
+    for (id, key, marker, letter) in [(main, 30, "main-key", "a"), (dialog, 48, "dialog-key", "b")]
+    {
+        send(&mut viewer, id, Message::Focus { active: true });
+        send(
+            &mut viewer,
+            id,
+            Message::Pointer {
+                x: 20,
+                y: 10,
+                pressed: true,
+            },
+        );
+        send(
+            &mut viewer,
+            id,
+            Message::Pointer {
+                x: 20,
+                y: 10,
+                pressed: false,
+            },
+        );
+        send(&mut viewer, id, Message::Keys { held: vec![key] });
+        send(&mut viewer, id, Message::Keys { held: vec![] });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while fs::read_to_string(session.runtime.path().join(marker)).as_deref() != Ok(letter)
+            || !fs::read_to_string(session.runtime.path().join(format!("{marker}-text")))
+                .is_ok_and(|s| s.contains(letter))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "Java input for {marker} failed: {}",
+                session.log()
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(session.runtime.path().join("main-key")).unwrap(),
+        "a"
+    );
+    let size = Dimensions::new(803, 509).unwrap();
+    send(&mut viewer, main, Message::Resize { size });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while scene.windows[&main].decoder.size != size {
+        assert!(
+            Instant::now() < deadline,
+            "Java did not resize: {}",
+            session.log()
+        );
+        receive(&mut viewer, &mut scene, &session);
+    }
+    send(&mut viewer, dialog, Message::Close);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while scene.windows.contains_key(&dialog) {
+        assert!(
+            Instant::now() < deadline,
+            "Java dialog did not close: {}",
+            session.log()
+        );
+        receive(&mut viewer, &mut scene, &session);
+    }
+    assert!(scene.windows.contains_key(&main));
+    send(&mut viewer, main, Message::Close);
+}

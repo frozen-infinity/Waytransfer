@@ -18,6 +18,54 @@ pub fn window_focused(window: &Window) -> bool {
     window.is_active()
 }
 
+/// Convert stretched native window coordinates to the most recently decoded frame.
+pub fn map_pointer(x: f32, y: f32, native: (usize, usize), size: crate::Dimensions) -> (u16, u16) {
+    let px = (x.max(0.0) as f64 * f64::from(size.width) / native.0.max(1) as f64) as u16;
+    let py = (y.max(0.0) as f64 * f64::from(size.height) / native.1.max(1) as f64) as u16;
+    (px.min(size.width - 1), py.min(size.height - 1))
+}
+/// Debounce drag bursts; only the final stable size requests a remote keyframe.
+pub struct ResizeTracker {
+    native: (usize, usize),
+    last_sent: crate::Dimensions,
+    changed: std::time::Instant,
+}
+impl ResizeTracker {
+    pub fn new(
+        native: (usize, usize),
+        initial: crate::Dimensions,
+        now: std::time::Instant,
+    ) -> Self {
+        Self {
+            native,
+            last_sent: initial,
+            changed: now,
+        }
+    }
+    pub fn observe(
+        &mut self,
+        native: (usize, usize),
+        now: std::time::Instant,
+    ) -> Option<crate::Dimensions> {
+        if native.0 == 0 || native.1 == 0 {
+            return None;
+        }
+        if native != self.native {
+            self.native = native;
+            self.changed = now;
+        }
+        let size = crate::Dimensions::fit(native.0, native.1);
+        if size != self.last_sent
+            && now.saturating_duration_since(self.changed) >= std::time::Duration::from_millis(150)
+        {
+            self.last_sent = size;
+            Some(size)
+        } else {
+            None
+        }
+    }
+}
+
 pub fn evdev(key: Key) -> Option<u16> {
     Some(match key {
         Key::Escape => 1,
@@ -134,5 +182,43 @@ mod tests {
         assert_eq!(evdev(Key::A), Some(30));
         assert_eq!(evdev(Key::RightCtrl), Some(97));
         assert_eq!(evdev(Key::Unknown), None);
+    }
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+    use crate::Dimensions;
+    use std::time::{Duration, Instant};
+    #[test]
+    fn drag_debounce_and_pointer_mapping_while_waiting_for_remote_resize() {
+        let now = Instant::now();
+        let mut tracker = ResizeTracker::new((640, 400), Dimensions::default(), now);
+        assert_eq!(tracker.observe((800, 500), now), None);
+        assert_eq!(
+            tracker.observe((900, 600), now + Duration::from_millis(100)),
+            None
+        );
+        assert_eq!(
+            tracker.observe((900, 600), now + Duration::from_millis(249)),
+            None
+        );
+        assert_eq!(
+            tracker.observe((900, 600), now + Duration::from_millis(250)),
+            Some(Dimensions::new(900, 600).unwrap())
+        );
+        assert_eq!(
+            tracker.observe((900, 600), now + Duration::from_millis(500)),
+            None
+        );
+        assert_eq!(
+            map_pointer(450.0, 300.0, (900, 600), Dimensions::default()),
+            (320, 200)
+        );
+        assert_eq!(
+            map_pointer(900.0, 600.0, (900, 600), Dimensions::default()),
+            (639, 399)
+        );
+        assert_eq!(tracker.observe((0, 0), now + Duration::from_secs(1)), None);
     }
 }

@@ -1,5 +1,5 @@
 //! Headless, one-toplevel Wayland compositor. Only wl_shm software clients are advertised.
-use crate::{Message, HEIGHT, WIDTH};
+use crate::{Dimensions, Message};
 use smithay::{
     backend::{
         input::{Axis, AxisSource, ButtonState, KeyState},
@@ -75,6 +75,7 @@ pub struct SingleWindow {
     pub seat: Seat<Self>,
     pub output: Output,
     window: Option<Window>,
+    size: Dimensions,
     popups: PopupManager,
     dirty: bool,
     start: Instant,
@@ -84,6 +85,10 @@ pub struct SingleWindow {
 }
 impl SingleWindow {
     pub fn new(display: &DisplayHandle) -> Result<Self, Box<dyn Error>> {
+        Self::new_sized(display, Dimensions::default())
+    }
+    pub fn new_sized(display: &DisplayHandle, size: Dimensions) -> Result<Self, Box<dyn Error>> {
+        let size = size.validate()?;
         let mut seats = SeatState::new();
         let mut seat = seats.new_wl_seat(display, "waytransfer");
         seat.add_keyboard(
@@ -106,7 +111,7 @@ impl SingleWindow {
         );
         output.create_global::<Self>(display);
         let mode = Mode {
-            size: (WIDTH as i32, HEIGHT as i32).into(),
+            size: (size.width as i32, size.height as i32).into(),
             refresh: 30000,
         };
         output.change_current_state(
@@ -128,6 +133,7 @@ impl SingleWindow {
             seat,
             output,
             window: None,
+            size,
             popups: PopupManager::default(),
             dirty: true,
             start: Instant::now(),
@@ -144,6 +150,37 @@ impl SingleWindow {
         display
             .clone()
             .insert_client(stream, Arc::new(ClientState::default()))
+    }
+    pub fn dimensions(&self) -> Dimensions {
+        self.size
+    }
+    pub fn resize(&mut self, size: Dimensions) -> std::io::Result<()> {
+        let size = size.validate()?;
+        if self.size == size {
+            return Ok(());
+        }
+        self.size = size;
+        let previous = self.output.current_mode();
+        let mode = Mode {
+            size: (size.width as i32, size.height as i32).into(),
+            refresh: 30000,
+        };
+        self.output
+            .change_current_state(Some(mode), None, None, None);
+        self.output.set_preferred(mode);
+        if let Some(previous) = previous {
+            self.output.delete_mode(previous);
+        }
+        if let Some(window) = &self.window {
+            if let Some(top) = window.toplevel() {
+                top.with_pending_state(|state| {
+                    state.size = Some((size.width as i32, size.height as i32).into())
+                });
+                top.send_configure();
+            }
+        }
+        self.dirty = true;
+        Ok(())
     }
     fn root(&self) -> Option<WlSurface> {
         self.window
@@ -206,6 +243,9 @@ impl SingleWindow {
         let time = self.start.elapsed().as_millis() as u32;
         self.keyboard_focus();
         match message {
+            Message::Resize { size } => {
+                self.resize(size).map_err(|_| "unsupported resize")?;
+            }
             Message::Focus { active } => {
                 if !active {
                     self.release_input();
@@ -214,9 +254,9 @@ impl SingleWindow {
                 self.keyboard_focus();
             }
             Message::Pointer { x, y, pressed } => {
-                if x as usize >= WIDTH || y as usize >= HEIGHT {
-                    return Err("pointer outside surface");
-                }
+                // Requests and frame updates cross in flight during a resize.
+                let x = x.min(self.size.width - 1);
+                let y = y.min(self.size.height - 1);
                 if !self.active {
                     return Ok(());
                 }
@@ -337,6 +377,13 @@ impl SingleWindow {
         if !std::mem::take(&mut self.dirty) {
             return Ok(None);
         }
+        if image.width() != self.size.width as usize || image.height() != self.size.height as usize
+        {
+            *image = renderer.create_buffer(
+                smithay::backend::allocator::Fourcc::Argb8888,
+                (self.size.width as i32, self.size.height as i32).into(),
+            )?;
+        }
         let elements: Vec<WaylandSurfaceRenderElement<PixmanRenderer>> = self
             .window
             .as_ref()
@@ -350,10 +397,10 @@ impl SingleWindow {
             })
             .unwrap_or_default();
         let mut target = renderer.bind(image)?;
-        let damage = Rectangle::from_size((WIDTH as i32, HEIGHT as i32).into());
+        let damage = Rectangle::from_size((self.size.width as i32, self.size.height as i32).into());
         let mut frame = renderer.render(
             &mut target,
-            (WIDTH as i32, HEIGHT as i32).into(),
+            (self.size.width as i32, self.size.height as i32).into(),
             Transform::Normal,
         )?;
         frame.clear(Color32F::new(0.094, 0.125, 0.173, 1.0), &[damage])?;
@@ -361,7 +408,7 @@ impl SingleWindow {
         frame.finish()?.wait()?;
         let mapping = renderer.copy_framebuffer(
             &target,
-            Rectangle::from_size((WIDTH as i32, HEIGHT as i32).into()),
+            Rectangle::from_size((self.size.width as i32, self.size.height as i32).into()),
             smithay::backend::allocator::Fourcc::Argb8888,
         )?;
         let bytes = renderer.map_texture(&mapping)?;
@@ -393,7 +440,11 @@ impl SingleWindow {
         let mut renderer = PixmanRenderer::new()?;
         let image = renderer.create_buffer(
             smithay::backend::allocator::Fourcc::Argb8888,
-            (WIDTH as i32, HEIGHT as i32).into(),
+            (
+                Dimensions::default().width as i32,
+                Dimensions::default().height as i32,
+            )
+                .into(),
         )?;
         Ok((renderer, image))
     }
@@ -415,7 +466,7 @@ impl CompositorHandler for SingleWindow {
             window.on_commit();
             window.output_enter(
                 &self.output,
-                Rectangle::from_size((WIDTH as i32, HEIGHT as i32).into()),
+                Rectangle::from_size((self.size.width as i32, self.size.height as i32).into()),
             );
         }
         self.dirty = true;
@@ -465,7 +516,7 @@ impl XdgShellHandler for SingleWindow {
             return;
         }
         surface.with_pending_state(|state| {
-            state.size = Some((WIDTH as i32, HEIGHT as i32).into());
+            state.size = Some((self.size.width as i32, self.size.height as i32).into());
             state.states.set(xdg_toplevel::State::Activated);
             state.states.set(xdg_toplevel::State::Maximized);
         });
@@ -483,7 +534,7 @@ impl XdgShellHandler for SingleWindow {
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         surface.with_pending_state(|state| {
             state.geometry = positioner.get_unconstrained_geometry(Rectangle::from_size(
-                (WIDTH as i32, HEIGHT as i32).into(),
+                (self.size.width as i32, self.size.height as i32).into(),
             ));
         });
         if let Err(e) = self.popups.track_popup(surface.clone().into()) {
@@ -517,7 +568,7 @@ impl XdgShellHandler for SingleWindow {
     ) {
         surface.with_pending_state(|state| {
             state.geometry = positioner.get_unconstrained_geometry(Rectangle::from_size(
-                (WIDTH as i32, HEIGHT as i32).into(),
+                (self.size.width as i32, self.size.height as i32).into(),
             ))
         });
         surface.send_repositioned(token);

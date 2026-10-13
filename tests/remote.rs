@@ -62,3 +62,48 @@ fn oversized_input_is_rejected_before_allocation() {
         RemoteEvent::Disconnected
     ));
 }
+
+#[test]
+fn coalesced_resizes_and_reconnect_reset_dimensions() {
+    let server = RemoteServer::bind_sized("127.0.0.1:0", Dimensions::new(97, 65).unwrap()).unwrap();
+    let mut stream = TcpStream::connect(server.local_addr()).unwrap();
+    handshake(&mut stream).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let mut decoder = Decoder::default();
+    decoder.apply(read_message(&mut stream).unwrap()).unwrap();
+    assert_eq!(decoder.size, Dimensions::new(97, 65).unwrap());
+    let size = Dimensions::new(801, 503).unwrap();
+    write_message(&mut stream, &Message::Resize { size }).unwrap();
+    assert!(
+        matches!(server.events.recv_timeout(Duration::from_secs(2)).unwrap(),RemoteEvent::Input(Message::Resize {size:s}) if s==size)
+    );
+    for width in 98..120 {
+        let size = Dimensions::new(width, 70).unwrap();
+        server
+            .publish_sized(size, vec![0x112233; size.pixel_count()])
+            .unwrap();
+    }
+    server
+        .publish_sized(size, vec![0x445566; size.pixel_count()])
+        .unwrap();
+    while decoder.size != size {
+        decoder.apply(read_message(&mut stream).unwrap()).unwrap();
+    }
+    assert!(decoder.pixels.iter().all(|p| *p == 0x445566));
+    drop(stream);
+    assert!(matches!(
+        server.events.recv_timeout(Duration::from_secs(2)).unwrap(),
+        RemoteEvent::Disconnected
+    ));
+    let mut stream = TcpStream::connect(server.local_addr()).unwrap();
+    handshake(&mut stream).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let mut decoder = Decoder::default();
+    decoder.apply(read_message(&mut stream).unwrap()).unwrap();
+    assert_eq!(decoder.size, size);
+    assert!(decoder.pixels.iter().all(|p| *p == 0x445566));
+}

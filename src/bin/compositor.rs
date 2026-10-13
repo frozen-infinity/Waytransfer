@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use waytransfer::{
         compositor::SingleWindow,
         remote::{RemoteEvent, RemoteServer},
+        Dimensions,
     };
     struct ChildGuard(Option<Child>);
     impl Drop for ChildGuard {
@@ -31,18 +32,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut address = "127.0.0.1:7878".to_string();
     let mut socket_name = "waytransfer-0".to_string();
+    let mut size = Dimensions::default();
     let mut command = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--listen" => address = args.next().ok_or("--listen needs an address")?,
+            "--size" => size = args.next().ok_or("--size needs WIDTHxHEIGHT")?.parse()?,
             "--socket" => socket_name = args.next().ok_or("--socket needs a name")?,
             "--" => {
                 command.extend(args);
                 break;
             }
             "--help" | "-h" => {
-                println!("compositor [--listen 127.0.0.1:7878] [--socket waytransfer-0] [-- PROGRAM ARGS...]\nHeadless single-window Wayland session; wl_shm software clients only.");
+                println!("compositor [--listen 127.0.0.1:7878] [--socket waytransfer-0] [--size 640x400] [-- PROGRAM ARGS...]\nHeadless single-window Wayland session; wl_shm software clients only.");
                 return Ok(());
             }
             _ => {
@@ -63,10 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("XDG_RUNTIME_DIR must be a private directory (mode 0700)".into());
     }
     let socket = ListeningSocket::bind(&socket_name)?;
-    let remote = RemoteServer::bind(&address)?;
+    let remote = RemoteServer::bind_sized(&address, size)?;
     let mut display = SingleWindow::new_display()?;
     let dh = display.handle();
-    let mut state = SingleWindow::new(&dh)?;
+    let mut state = SingleWindow::new_sized(&dh, size)?;
     let (mut renderer, mut image) = SingleWindow::renderer()?;
     let running = Arc::new(AtomicBool::new(true));
     let signal = running.clone();
@@ -111,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if let Some(pixels) = state.render(&mut renderer, &mut image)? {
-            remote.publish(pixels)?;
+            remote.publish_sized(state.dimensions(), pixels)?;
         }
         display.flush_clients()?;
         if let Some(child) = child.0.as_mut() {

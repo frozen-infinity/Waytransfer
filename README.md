@@ -11,7 +11,7 @@ the Mac. The Mac displays the result in a native window and sends input back.
 ## Run a real application
 
 Use stable Rust (1.95 or newer), and build the same branch on both machines.
-**Wire protocol v2 requires rebuilding both sides; the original v1 viewer cannot
+**Wire protocol v3 requires rebuilding both sides; older v1/v2 viewers cannot
 connect.** Stop the original demo sender before starting the compositor on its port.
 
 On Arch Linux / the OMEN, install build/runtime dependencies:
@@ -76,10 +76,34 @@ Run the second command in another Linux terminal with the same `XDG_RUNTIME_DIR`
 Additional options: `--listen 127.0.0.1:7878`, `--socket waytransfer-0`, `--help`.
 Direct TCP is unauthenticated and unencrypted; use the SSH tunnel for remote use.
 
+## Window sizing
+
+Choose an initial size on the OMEN:
+
+```sh
+cargo run --release --features compositor --bin compositor -- --size 1024x768 -- weston-terminal
+```
+
+The Mac window starts at the first frame's advertised size. Drag its border or use
+its zoom control to request a new remote size. Resize requests wait for 150 ms of
+stable window size to avoid a full refresh on every drag event. While waiting, the
+previous image stretches to fit; pointer coordinates map to the currently decoded
+frame. The Linux compositor updates its virtual output and sends an xdg-shell
+configure to the application. A new-size canvas may appear briefly before the app
+commits its resized buffer. Applications can impose their own size hints.
+
+Limits: positive dimensions, at most 2048 per side and 2,097,152 total pixels
+(1920×1080 fits). Larger Mac windows request a proportionally fitted framebuffer
+and display it stretched; this is a resolution budget, not HiDPI negotiation.
+Frames and reset allocations are bounded. The JSON packet ceiling is 40 MiB to
+accommodate incompressible full frames within those limits; the input channel
+remains capped at 4 KiB per packet. Normal compressed UI updates are far smaller.
+Large/high-entropy redraws still cost bandwidth; use a smaller window on slow Wi-Fi.
+
 ## Current support and limits
 
-- One xdg-shell toplevel, requested at 640×400, scale 1. Extra toplevels receive a
-  close request. Dialogs requiring another toplevel are therefore unsupported.
+- One xdg-shell toplevel, default 640×400, with configurable/resizable dimensions,
+  scale 1. Extra toplevels receive a close request. Dialogs requiring another toplevel are therefore unsupported.
 - Smithay handles surface commits, SHM buffers and subsurface state. Pixman renders
   the surface tree; popup positioning/rendering/grabs are implemented but have not
   yet received the same integration coverage as the main window.
@@ -88,7 +112,7 @@ Direct TCP is unauthenticated and unencrypted; use the SSH tunnel for remote use
   translation. OS-reserved shortcuts may stay on the Mac. Custom remote cursor
   images are not rendered; the viewer uses its local pointer.
 - No DMA-BUF/EGL/OpenGL clients, XWayland/X11, existing-desktop capture, window
-  resizing, HiDPI, multiwindow management or clipboard exchange with macOS.
+  HiDPI, multiwindow management or clipboard exchange with macOS.
   GPU applications such as Kitty and X11 applications such as some IDE builds need
   further backend work. Start testing with `weston-terminal`.
 - Linux content rendering and Mac presentation are working; application font/vector
@@ -100,7 +124,7 @@ does not take over the OMEN's existing desktop.
 
 ## Bandwidth and responsiveness
 
-640×400 frames are split into 32×32 tiles, including partial edge tiles. Exact
+Variable-size frames are split into 32×32 tiles, including partial edge tiles. Exact
 comparison skips unchanged tiles; changed tiles use lossless LZ4 compression.
 Idle content sends zero frame bytes. There is no persistent tile deduplication yet.
 JSON length-prefixed messages are readable but add byte-array overhead.
@@ -112,10 +136,13 @@ breaking sequence numbers. Bounded input queues and separate network workers kee
 slow writes out of the Wayland/UI loops. Input transitions are retained; excessive
 viewer backlog closes the connection with an error instead of silently losing keys.
 
-Each reconnect resets the encoder and starts with a complete frame. Packet lengths,
+Each reconnect resets the encoder and starts with a complete frame at the latest
+size. Every dimension change also sends a complete reset frame; partial deltas are
+accepted only for the current size, and malformed resets leave the old frame intact. Packet lengths,
 tile coordinates, sequence numbers and decompressed sizes are checked before an
 update changes the client framebuffer. Sender logs actual message bytes versus
-1,024,000 raw frame bytes. RTT still limits input response; these mechanisms reduce
+the current raw frame size (1,024,000 bytes at the default 640×400). RTT still limits
+input response; these mechanisms reduce
 bandwidth, not the network's round-trip delay.
 
 ## Original square demo
@@ -144,9 +171,11 @@ cargo build --locked --all-features
 ```
 
 Linux tests include an independent Wayland SHM client, pixel-exact reconstruction
-across TCP, pointer clicks, keyboard press/release, frame callbacks, focus loss and
-viewer disconnect/reconnect. Linux CI also starts the actual compositor binary and
-`weston-terminal`, renders its pixels and executes a remotely typed shell command:
+across TCP, pointer clicks, keyboard press/release, frame callbacks, focus loss,
+viewer disconnect/reconnect and application resize/repaint at odd dimensions.
+Linux CI also starts the actual compositor binary and
+`weston-terminal`, renders its pixels and executes remotely typed shell commands
+before and after resizing:
 
 ```sh
 WAYTRANSFER_TEST_WESTON=1 cargo test --locked --features compositor --test real_app -- --nocapture

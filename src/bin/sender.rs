@@ -11,21 +11,38 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut stream = connection?;
             handshake(&mut stream)?;
             let mut encoder = Encoder::default();
-            let mut send =
-                |stream: &mut std::net::TcpStream, x, y, pressed| -> Result<(), Box<dyn Error>> {
-                    if let Some(frame) = encoder.encode(&demo_frame(x, y, pressed))? {
-                        let bytes = write_message(stream, &frame)?;
-                        println!("Update: {bytes} bytes (raw frame: {})", WIDTH * HEIGHT * 4);
-                    }
-                    Ok(())
-                };
-            send(&mut stream, WIDTH / 2, HEIGHT / 2, false)?;
+            let mut size = Dimensions::default();
+            let mut position = (WIDTH / 2, HEIGHT / 2, false);
+            let mut send = |stream: &mut std::net::TcpStream,
+                            size: Dimensions,
+                            x,
+                            y,
+                            pressed|
+             -> Result<(), Box<dyn Error>> {
+                if let Some(frame) =
+                    encoder.encode_sized(size, &demo_frame_sized(size, x, y, pressed)?)?
+                {
+                    let bytes = write_message(stream, &frame)?;
+                    println!(
+                        "Update: {bytes} bytes (raw frame: {})",
+                        size.pixel_count() * 4
+                    );
+                }
+                Ok(())
+            };
+            send(&mut stream, size, position.0, position.1, position.2)?;
             loop {
                 match read_message(&mut stream)? {
                     Message::Pointer { x, y, pressed }
-                        if (x as usize) < WIDTH && (y as usize) < HEIGHT =>
+                        if (x as usize) < size.width as usize
+                            && (y as usize) < size.height as usize =>
                     {
-                        send(&mut stream, x as usize, y as usize, pressed)?
+                        position = (x as usize, y as usize, pressed);
+                        send(&mut stream, size, position.0, position.1, position.2)?
+                    }
+                    Message::Resize { size: requested } => {
+                        size = requested.validate()?;
+                        send(&mut stream, size, position.0, position.1, position.2)?;
                     }
                     Message::Keys { .. }
                     | Message::Buttons { .. }

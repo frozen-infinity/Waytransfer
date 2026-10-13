@@ -36,6 +36,8 @@ fn weston_terminal_renders_and_executes_remote_keyboard_input() {
             &addr.to_string(),
             "--socket",
             "waytransfer-test",
+            "--size",
+            "803x509",
             "--",
             "weston-terminal",
         ])
@@ -110,6 +112,45 @@ fn weston_terminal_renders_and_executes_remote_keyboard_input() {
         assert!(
             session.0.try_wait().unwrap().is_none(),
             "terminal session exited"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    // The shell must see the new terminal dimensions after xdg configure/repaint.
+    let size = Dimensions::new(961, 607).unwrap();
+    write_message(&mut viewer, &Message::Resize { size }).unwrap();
+    while decoder.size != size {
+        decoder.apply(read_message(&mut viewer).unwrap()).unwrap();
+    }
+    thread::sleep(Duration::from_millis(250));
+    let before = runtime.path().join("keyboard-ok");
+    assert!(before.exists());
+    // A second command after resizing verifies that keyboard focus survives it.
+    for character in "touch resize-ok\n".chars() {
+        let key = match character {
+            't' => 20,
+            'o' => 24,
+            'u' => 22,
+            'c' => 46,
+            'h' => 35,
+            ' ' => 57,
+            'r' => 19,
+            'e' => 18,
+            's' => 31,
+            'i' => 23,
+            'z' => 44,
+            '-' => 12,
+            'k' => 37,
+            '\n' => 28,
+            _ => panic!("unexpected character"),
+        };
+        write_message(&mut viewer, &Message::Keys { held: vec![key] }).unwrap();
+        write_message(&mut viewer, &Message::Keys { held: vec![] }).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !runtime.path().join("resize-ok").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "terminal input did not survive resize"
         );
         thread::sleep(Duration::from_millis(20));
     }

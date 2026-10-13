@@ -176,7 +176,7 @@ impl SingleWindow {
             #[cfg(feature = "gpu")]
             import_renderer: None,
             display: display.clone(),
-            compositor: CompositorState::new::<Self>(display),
+            compositor: CompositorState::new_v6::<Self>(display),
             shell: XdgShellState::new::<Self>(display),
             shm: ShmState::new::<Self>(display, vec![]),
             data_device: DataDeviceState::new::<Self>(display),
@@ -360,6 +360,28 @@ impl SingleWindow {
             }
             other if self.selected == Some(id) => self.input(other),
             _ => Ok(()),
+        }
+    }
+    /// Complete nested presentation without copying the private parent's buffers to CPU.
+    pub fn present_nested_parent(&mut self) {
+        self.keyboard_focus();
+        self.popups.cleanup();
+        for entry in self.windows.values_mut() {
+            if entry.dirty {
+                entry.dirty = false;
+                entry.window.on_commit();
+                entry.window.with_surfaces(|_, states| {
+                    for callback in states
+                        .cached_state
+                        .get::<SurfaceAttributes>()
+                        .current()
+                        .frame_callbacks
+                        .drain(..)
+                    {
+                        callback.done(self.start.elapsed().as_millis() as u32);
+                    }
+                });
+            }
         }
     }
     pub fn render_windows(
@@ -784,6 +806,11 @@ impl CompositorHandler for SingleWindow {
         }
         panic!("client has no compositor state")
     }
+    fn new_surface(&mut self, surface: &WlSurface) {
+        with_states(surface, |states| {
+            smithay::wayland::compositor::send_surface_state(surface, states, 1, Transform::Normal);
+        });
+    }
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
@@ -1030,7 +1057,7 @@ smithay::delegate_output!(SingleWindow);
 
 #[cfg(feature = "gpu")]
 impl SingleWindow {
-    pub fn advertise_gpu(&mut self, engine: &RenderEngine) -> Result<(), Box<dyn Error>> {
+    pub fn advertise_gpu(&mut self, engine: &RenderEngine) -> Result<bool, Box<dyn Error>> {
         use smithay::backend::{
             egl::EGLContext,
             renderer::{gles::GlesRenderer, ImportDma},
@@ -1042,11 +1069,26 @@ impl SingleWindow {
             self.import_renderer = Some(unsafe { GlesRenderer::new(context) }?);
             let formats = renderer.dmabuf_formats();
             if formats.iter().next().is_some() {
+                use smithay::{backend::egl::EGLDevice, wayland::dmabuf::DmabufFeedbackBuilder};
+                use std::os::unix::fs::{FileTypeExt, MetadataExt};
+                let node = EGLDevice::device_for_display(renderer.egl_context().display())
+                    .ok()
+                    .and_then(|device| device.render_device_path().ok())
+                    .and_then(|path| std::fs::metadata(path).ok())
+                    .filter(|metadata| metadata.file_type().is_char_device());
+                if let Some(node) = node {
+                    let feedback =
+                        DmabufFeedbackBuilder::new(node.rdev(), formats.iter().copied()).build()?;
+                    self.dmabuf_state
+                        .create_global_with_default_feedback::<Self>(&self.display, &feedback);
+                    return Ok(true);
+                }
+                // Preserve v3 imports for software EGL without render-node feedback.
                 self.dmabuf_state
                     .create_global::<Self>(&self.display, formats.iter().copied());
             }
         }
-        Ok(())
+        Ok(false)
     }
 }
 #[cfg(feature = "gpu")]

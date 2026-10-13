@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut socket_name = "waytransfer-0".to_string();
     let mut size = Dimensions::default();
     let mut accelerated = false;
+    let mut nested_parent = false;
     let mut use_x11 = false;
     let mut app_backend = "auto".to_string();
     let mut command = Vec::new();
@@ -42,6 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--gpu" => accelerated = true,
+            "--nested-parent" => {
+                nested_parent = true;
+                accelerated = true;
+            }
             "--x11" => use_x11 = true,
             "--app-backend" => {
                 app_backend = args
@@ -59,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             "--help" | "-h" => {
-                println!("compositor [--listen 127.0.0.1:7878] [--socket waytransfer-0] [--size 640x400] [--app-backend auto|wayland|x11] [-- PROGRAM ARGS...]\nHeadless multiwindow session. Optional --gpu and --x11 require matching build features.\n--app-backend x11 requires --x11 and selects GTK/Qt/Java X11 for the launched application.");
+                println!("compositor [--nested-parent] [--listen 127.0.0.1:7878] [--socket waytransfer-0] [--size 640x400] [--app-backend auto|wayland|x11] [-- PROGRAM ARGS...]\nHeadless multiwindow session. Optional --gpu and --x11 require matching build features.\n--app-backend x11 requires --x11 and selects GTK/Qt/Java X11 for the launched application.");
                 return Ok(());
             }
             _ => {
@@ -83,7 +88,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("XDG_RUNTIME_DIR must be a private directory (mode 0700)".into());
     }
     let socket = ListeningSocket::bind(&socket_name)?;
-    let remote = RemoteServer::bind_multi(&address)?;
+    let remote = if nested_parent {
+        None
+    } else {
+        Some(RemoteServer::bind_multi(&address)?)
+    };
     let mut display = SingleWindow::new_display()?;
     let dh = display.handle();
     let mut state = SingleWindow::new_sized(&dh, size)?;
@@ -91,7 +100,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "gpu")]
         {
             let renderer = RenderEngine::gpu(&dh)?;
-            state.advertise_gpu(&renderer)?;
+            let feedback = state.advertise_gpu(&renderer)?;
+            if nested_parent && !feedback {
+                return Err("Nested Hyprland requires GPU DMA-BUF v4 feedback with an accessible EGL render node; software EGL is insufficient".into());
+            }
             renderer
         }
         #[cfg(not(feature = "gpu"))]
@@ -124,10 +136,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = Arc::new(AtomicBool::new(true));
     let signal = running.clone();
     ctrlc::set_handler(move || signal.store(false, Ordering::Relaxed))?;
-    println!(
-        "Multiwindow session: WAYLAND_DISPLAY={socket_name}; viewer address {}",
-        remote.local_addr()
-    );
+    if let Some(remote) = &remote {
+        println!(
+            "Multiwindow session: WAYLAND_DISPLAY={socket_name}; viewer address {}",
+            remote.local_addr()
+        );
+    } else {
+        println!("Private nested parent: WAYLAND_DISPLAY={socket_name}; no TCP listener");
+    }
     println!(
         "Applications run in this separate Wayland session; renderer: {}",
         if accelerated { "EGL/GLES" } else { "software" }
@@ -194,6 +210,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_loop.dispatch(Duration::ZERO, &mut state)?;
         // Bound per-tick input work as well as the network queue.
         for _ in 0..128 {
+            let Some(remote) = &remote else {
+                break;
+            };
             match remote.events.try_recv() {
                 Ok(RemoteEvent::Input(message)) => {
                     if let Err(e) = state.input(message) {
@@ -204,8 +223,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(_) => break,
             }
         }
-        if let Some(windows) = state.render_windows(&mut renderer)? {
-            remote.publish_windows(windows)?;
+        if let Some(remote) = &remote {
+            if let Some(windows) = state.render_windows(&mut renderer)? {
+                remote.publish_windows(windows)?;
+            }
+        } else {
+            state.present_nested_parent();
         }
         display.flush_clients()?;
         if let Some(process) = child.0.as_mut() {

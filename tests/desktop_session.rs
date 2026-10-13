@@ -271,7 +271,14 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
         thread::sleep(Duration::from_millis(20));
     }
     send(&mut viewer, Message::Close);
-    assert!(read_message(&mut viewer).is_err());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // Frames already queued before Close are valid; the connection must then end.
+    while read_message(&mut viewer).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "desktop Close did not disconnect"
+        );
+    }
     assert!(desktop.0.try_wait().unwrap().is_none());
 }
 

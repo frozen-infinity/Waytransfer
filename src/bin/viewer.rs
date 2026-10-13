@@ -80,6 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let tick = Instant::now();
         for _ in 0..32 {
             match rx.try_recv() {
+                Ok(Err(_)) if native.is_empty() && !scene.closing.is_empty() => return Ok(()),
                 Ok(message) => {
                     scene.apply(message?)?;
                 }

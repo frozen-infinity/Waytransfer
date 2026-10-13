@@ -82,13 +82,13 @@ socket=$(wait_socket "$runtime/session" "$hypr_pid" "$runtime/hyprland.log")
 for ((attempt=0; attempt<300; attempt++)); do
     kill -0 "$hypr_pid" 2>/dev/null || { cat "$runtime/hyprland.log" >&2; exit 1; }
     if timeout 2s env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$runtime/session" WAYLAND_DISPLAY="$socket" \
-        "$desktop_binary" --list-outputs >"$runtime/outputs.log" 2>/dev/null && [[ -s "$runtime/outputs.log" ]]; then break; fi
+        "$desktop_binary" --list-outputs >"$runtime/outputs.log" 2>/dev/null && [[ "$(cat "$runtime/outputs.log")" == *"WAYLAND-1:"* ]]; then break; fi
     sleep 0.1
 done
-[[ -s "$runtime/outputs.log" ]] || { echo 'Hyprland has no output' >&2; cat "$runtime/hyprland.log" >&2; exit 1; }
+[[ "$(cat "$runtime/outputs.log")" == *"WAYLAND-1:"* ]] || { echo 'Hyprland has no output' >&2; cat "$runtime/hyprland.log" >&2; exit 1; }
 echo "Session WAYLAND_DISPLAY=$(basename "$socket"); runtime: $runtime"
 echo 'Ctrl-C ends this private desktop. Viewer disconnects leave it running.'
 env -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$runtime/session" WAYLAND_DISPLAY="$socket" \
-    "$desktop_binary" --listen "$listen" "$@" &
+    "$desktop_binary" --listen "$listen" --output WAYLAND-1 "$@" &
 desktop_pid=$!
 wait "$desktop_pid"

@@ -1,17 +1,17 @@
 # Waytransfer
 
 Open-source Rust software for using Linux applications from a MacBook over limited
-bandwidth. This branch adds an **experimental headless, single-window Wayland
+bandwidth. This branch adds an **experimental headless, multiwindow Wayland
 compositor** alongside the original square demo.
 
-A Linux application runs in a separate Wayland session. Its shared-memory buffers
-are composed in software on Linux and sent as lossless compressed tile deltas to
+A Linux application runs in a separate Wayland session. Its buffers
+are composed on Linux (software by default, optional EGL/GLES) and sent as lossless compressed tile deltas to
 the Mac. The Mac displays the result in a native window and sends input back.
 
 ## Run a real application
 
 Use stable Rust (1.95 or newer), and build the same branch on both machines.
-**Wire protocol v4 requires rebuilding both sides; older v1/v2/v3 viewers cannot
+**Wire protocol v5 requires rebuilding both sides; older v1/v2/v3/v4 viewers cannot
 connect.** Stop the original demo sender before starting the compositor on its port.
 
 On Arch Linux / the OMEN, install build/runtime dependencies:
@@ -45,12 +45,14 @@ In another MacBook terminal:
 cargo run --release --features viewer --bin viewer -- 127.0.0.1:7878
 ```
 
-Type into the remote terminal, click, select text or scroll. **Escape now goes to
-the application; close the native viewer window to disconnect.** Switching away
+Type into the remote terminal, click, select text or scroll. Escape goes to
+the application; closing a native window requests that application window to close. Switching away
 from the viewer releases held keys/buttons. Reconnecting gets a fresh full frame.
 The application continues while the viewer is disconnected. Ctrl-C in the Linux
 compositor terminal ends the session and stops the directly launched application.
-When that application exits, the compositor exits too.
+The compositor remains available when an application exits; Ctrl-C ends it.
+Each Linux toplevel appears as a separate native Mac window. Focus, input, titles,
+resizing and close requests are scoped to that window. Mac window dragging is local.
 
 Choose another software-rendered Wayland application after `--`:
 
@@ -58,9 +60,9 @@ Choose another software-rendered Wayland application after `--`:
 cargo run --release --features compositor --bin compositor -- -- your-wayland-app arg1
 ```
 
-The launcher sets `GDK_BACKEND=wayland`, `GSK_RENDERER=cairo`,
-`GDK_DEBUG=gl-disable`, `QT_QPA_PLATFORM=wayland`, `QT_QUICK_BACKEND=software`
-and `QT_WAYLAND_DISABLE_WINDOWDECORATION=1` for its child only. These are helpful
+The software launcher sets `GSK_RENDERER=cairo`, `GDK_DEBUG=gl-disable`,
+`QT_QUICK_BACKEND=software` and `QT_WAYLAND_DISABLE_WINDOWDECORATION=1`
+for its child only. GPU mode omits the software-rendering overrides. These are helpful
 software-backend defaults, **not a guarantee that every GTK/Qt application works**.
 Avoid applications that forward launches to an already-running instance; they may
 open on your existing desktop instead of this session.
@@ -73,6 +75,7 @@ WAYLAND_DISPLAY=waytransfer-0 weston-terminal
 ```
 
 Run the second command in another Linux terminal with the same `XDG_RUNTIME_DIR`.
+Repeat the second command to open more application windows.
 Additional options: `--listen 127.0.0.1:7878`, `--socket waytransfer-0`, `--help`.
 Direct TCP is unauthenticated and unencrypted; use the SSH tunnel for remote use.
 
@@ -100,27 +103,56 @@ accommodate incompressible full frames within those limits; the input channel
 remains capped at 4 KiB per packet. Normal compressed UI updates are far smaller.
 Large/high-entropy redraws still cost bandwidth; use a smaller window on slow Wi-Fi.
 
+## Optional GPU and X11 applications
+
+Build these backends explicitly on Linux; the Mac viewer needs only `viewer`:
+
+```sh
+# Arch: optional dependencies (use your installed GPU driver)
+sudo pacman -S --needed libglvnd mesa xorg-xwayland xterm
+cargo run --release --features compositor,gpu,x11 --bin compositor -- --gpu --x11 -- weston-terminal
+```
+
+Debian/Ubuntu additionally needs `libegl1-mesa-dev libgles2-mesa-dev libwayland-dev
+xwayland xterm`. Use `--gpu` for EGL/GLES composition and available EGL/DMA-BUF
+imports. Use `--x11` for an isolated rootless XWayland server. These options can be
+used independently. GPU initialization errors stop startup; software mode remains
+available by omitting `--gpu`. Pixels are read back on Linux and sent as lossless
+tiles; this is not forwarding GPU commands to the Mac.
+
+The session prints its `WAYLAND_DISPLAY` and, with X11 enabled, its `DISPLAY`.
+In another OMEN terminal, use those **printed values** and the same runtime directory:
+
+```sh
+WAYLAND_DISPLAY=waytransfer-0 weston-terminal
+DISPLAY=:1 xterm # replace :1 with the printed DISPLAY
+```
+
+An app launched after `--` receives these values automatically. Avoid apps that
+reuse an instance already running on your ordinary desktop. X11 needs a working
+XWayland executable; GPU import depends on the installed EGL driver. Mesa software
+EGL tests exercise the accelerated API path, not physical GPU performance or
+NVIDIA compatibility. Kitty, IDEs and hardware DMA-BUF paths still need testing.
+
 ## Current support and limits
 
-- One xdg-shell toplevel, default 640×400, with configurable/resizable dimensions,
-  scale 1. Extra toplevels receive a close request. Dialogs requiring another toplevel are therefore unsupported.
-- Smithay handles surface commits, SHM buffers and subsurface state. Pixman renders
-  the surface tree; popup positioning/rendering/grabs are implemented but have not
-  yet received the same integration coverage as the main window.
-- Pointer motion, three mouse buttons, scrolling and basic physical keyboard input.
-  US layout only; no IME/text composition, layout negotiation or macOS shortcut
-  translation. OS-reserved shortcuts may stay on the Mac. Custom remote cursor
-  images are not rendered; the viewer uses its local pointer.
-- No DMA-BUF/EGL/OpenGL clients, XWayland/X11, existing-desktop capture, window
-  HiDPI, multiwindow management or clipboard exchange with macOS.
-  GPU applications such as Kitty and X11 applications such as some IDE builds need
-  further backend work. Start testing with `weston-terminal`.
-- Linux content rendering and Mac presentation are working; application font/vector
-  draw commands are not forwarded and there is no Metal renderer yet.
+- Multiple Wayland xdg-shell and optional X11 windows, each with independent
+  pixels, title, focus, size and lifecycle. Default initial size 640×400, scale 1.
+  Limits: 16 windows and 8,388,608 total advertised pixels per session/viewer.
+- Basic transient-parent relationships are passed to AppKit. Popup positioning,
+  rendering and grabs exist; popups beyond the window canvas can be clipped.
+  X11 override-redirect surfaces appear as separate native windows; desktop-grade
+  menus, stacking and dialog behavior need further compatibility work.
+- Pointer motion, three buttons, scrolling and basic US physical keyboard input.
+  No IME, layout negotiation, macOS shortcut translation, remote cursor images,
+  HiDPI negotiation or clipboard exchange. Mac OS shortcuts may stay on the Mac.
+- Optional EGL/GLES offscreen rendering and DMA-BUF import advertisement when
+  supported by the driver. Optional XWayland window management and keyboard focus.
+- Application font/vector commands are not forwarded; there is no Metal renderer.
 
-This is real Wayland application hosting with a deliberately limited scope, not a
-replacement for a production desktop compositor. It creates its own session and
-does not take over the OMEN's existing desktop.
+This hosts real applications in a separate experimental session. Whole-desktop
+Hyprland streaming is a future separate mode; it does not capture or replace the
+OMEN's current desktop. It is not a production desktop compositor.
 
 ## Bandwidth and responsiveness
 
@@ -131,13 +163,13 @@ The compact, length-prefixed [binary protocol](PROTOCOL.md) sends compressed
 tile bytes directly, avoiding the decimal arrays used by earlier JSON versions.
 
 The compositor renders on surface commits at up to 30 ticks/second. A network
-worker holds the latest raw framebuffer snapshot and encodes only the snapshots
+worker holds the latest raw scene snapshot and encodes only the snapshots
 it sends. It can skip intermediate raw frames without dropping encoded deltas or
 breaking sequence numbers. Bounded input queues and separate network workers keep
 slow writes out of the Wayland/UI loops. Input transitions are retained; excessive
 viewer backlog closes the connection with an error instead of silently losing keys.
 
-Each reconnect resets the encoder and starts with a complete frame at the latest
+Each window has an independent encoder and sequence. Each reconnect resets the encoders and starts with a complete frame at the latest
 size. Every dimension change also sends a complete reset frame; partial deltas are
 accepted only for the current size, and malformed resets leave the old frame intact. Packet lengths,
 tile coordinates, sequence numbers and decompressed sizes are checked before an

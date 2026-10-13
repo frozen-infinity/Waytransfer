@@ -81,8 +81,22 @@ fn real_xterm_renders_and_executes_scoped_remote_input() {
     if std::env::var("WAYTRANSFER_TEST_WESTON").as_deref() != Ok("1") {
         return;
     }
+    xterm_roundtrip(&["--x11"]);
+}
+#[cfg(all(feature = "x11", feature = "gpu"))]
+#[test]
+fn xterm_input_also_works_with_egl_composition() {
+    if std::env::var("WAYTRANSFER_TEST_WESTON").as_deref() != Ok("1")
+        || std::env::var("WAYTRANSFER_TEST_GPU").as_deref() != Ok("1")
+    {
+        return;
+    }
+    xterm_roundtrip(&["--gpu", "--x11"]);
+}
+#[cfg(feature = "x11")]
+fn xterm_roundtrip(flags: &[&str]) {
     let (session, mut viewer) = start(
-        &["--x11"],
+        flags,
         "xterm",
         &["-title", "Waytransfer X11 test", "-e", "/bin/sh"],
     );

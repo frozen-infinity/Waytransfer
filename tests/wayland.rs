@@ -27,6 +27,7 @@ use waytransfer::{
 
 #[derive(Default)]
 struct App {
+    size: Dimensions,
     surface: Option<wl_surface::WlSurface>,
     shm: Option<wl_shm::WlShm>,
     shell: Option<xdg_wm_base::XdgWmBase>,
@@ -54,20 +55,24 @@ impl App {
         }
     }
     fn pixels(&self) -> Vec<u32> {
-        let mut pixels = vec![0x102030; WIDTH * HEIGHT];
+        let (width, height) = (self.size.width as usize, self.size.height as usize);
+        let mut pixels = vec![0x102030; width * height];
         // Distinct corners detect flipped output and incorrect channel order.
         pixels[0] = 0xff0000;
-        pixels[WIDTH - 1] = 0x00ff00;
-        pixels[WIDTH * (HEIGHT - 1)] = 0x0000ff;
+        pixels[width - 1] = 0x00ff00;
+        pixels[width * (height - 1)] = 0x0000ff;
         if self.key_seen {
-            pixels[10 * WIDTH + 10] = if self.key_pressed { 0xabcdef } else { 0x123456 };
+            pixels[10 * width + 10] = if self.key_pressed { 0xabcdef } else { 0x123456 };
         }
         if let Some((x, y)) = self.click {
-            pixels[y * WIDTH + x] = 0x55aa22;
+            if x < width && y < height {
+                pixels[y * width + x] = 0x55aa22;
+            }
         }
         pixels
     }
     fn paint(&self, qh: &QueueHandle<Self>) {
+        let (width, height) = (self.size.width as usize, self.size.height as usize);
         if !self.configured {
             return;
         }
@@ -77,19 +82,19 @@ impl App {
             for pixel in self.pixels() {
                 file.write_all(&(pixel | 0xff000000).to_ne_bytes()).unwrap();
             }
-            let pool = shm.create_pool(file.as_fd(), (WIDTH * HEIGHT * 4) as i32, qh, ());
+            let pool = shm.create_pool(file.as_fd(), (width * height * 4) as i32, qh, ());
             let buffer = pool.create_buffer(
                 0,
-                WIDTH as i32,
-                HEIGHT as i32,
-                (WIDTH * 4) as i32,
+                width as i32,
+                height as i32,
+                (width * 4) as i32,
                 wl_shm::Format::Argb8888,
                 qh,
                 (),
             );
             pool.destroy();
             surface.attach(Some(&buffer), 0, 0);
-            surface.damage_buffer(0, 0, WIDTH as i32, HEIGHT as i32);
+            surface.damage_buffer(0, 0, width as i32, height as i32);
             surface.frame(qh, ());
             surface.commit();
         }
@@ -177,7 +182,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
         _: &QueueHandle<Self>,
     ) {
         if let xdg_toplevel::Event::Configure { width, height, .. } = event {
-            assert_eq!((width, height), (WIDTH as i32, HEIGHT as i32));
+            state.size = Dimensions::new(width as usize, height as usize).unwrap();
             state.notify("configure");
         }
     }
@@ -323,7 +328,7 @@ fn real_wayland_shm_pixels_pointer_keyboard_focus_and_disconnect() {
                 }
             }
             if let Some(pixels) = state.render(&mut renderer, &mut image).unwrap() {
-                remote.publish(pixels).unwrap();
+                remote.publish_sized(state.dimensions(), pixels).unwrap();
             }
             display.flush_clients().unwrap();
             thread::sleep(Duration::from_millis(5));
@@ -394,6 +399,52 @@ fn real_wayland_shm_pixels_pointer_keyboard_focus_and_disconnect() {
         .unwrap();
     let mut after = Decoder::default();
     while after.pixels[10 * WIDTH + 10] != 0x123456 {
+        after
+            .apply(read_message(&mut reconnected).unwrap())
+            .unwrap();
+    }
+    // Odd sizes exercise partial tiles, Pixman stride and xdg configure/commit.
+    for size in [
+        Dimensions::new(801, 503).unwrap(),
+        Dimensions::new(351, 227).unwrap(),
+    ] {
+        write_message(&mut reconnected, &Message::Resize { size }).unwrap();
+        let expected = App {
+            size,
+            key_seen: true,
+            click: Some((60, 80)),
+            ..Default::default()
+        }
+        .pixels();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while after.size != size || after.pixels != expected {
+            assert!(
+                Instant::now() < deadline,
+                "client did not commit the resized buffer"
+            );
+            after
+                .apply(read_message(&mut reconnected).unwrap())
+                .unwrap();
+        }
+    }
+    let size = Dimensions::new(801, 503).unwrap();
+    write_message(&mut reconnected, &Message::Resize { size }).unwrap();
+    while after.size != size {
+        after
+            .apply(read_message(&mut reconnected).unwrap())
+            .unwrap();
+    }
+    // Input beyond the old 640x400 bounds must be routed after enlargement.
+    write_message(
+        &mut reconnected,
+        &Message::Pointer {
+            x: 700,
+            y: 450,
+            pressed: true,
+        },
+    )
+    .unwrap();
+    while after.pixels[450 * 801 + 700] != 0x55aa22 {
         after
             .apply(read_message(&mut reconnected).unwrap())
             .unwrap();

@@ -27,7 +27,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     {
                         send(&mut stream, x as usize, y as usize, pressed)?
                     }
-                    Message::Keys { .. }
+                    Message::Resize { .. }
+                    | Message::Keys { .. }
                     | Message::Buttons { .. }
                     | Message::Scroll { .. }
                     | Message::Focus { .. } => {}

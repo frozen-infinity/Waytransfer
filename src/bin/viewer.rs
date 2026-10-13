@@ -5,6 +5,7 @@ use std::{
     net::{Shutdown, TcpStream},
     sync::mpsc,
     thread,
+    time::{Duration, Instant},
 };
 use waytransfer::*;
 fn main() -> Result<(), Box<dyn Error>> {
@@ -35,6 +36,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("TCP handshake, initial frame, pointer input and delta reconstruction passed");
         return Ok(());
     }
+    let mut decoder = Decoder::default();
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    decoder.apply(read_message(&mut stream)?)?;
+    stream.set_read_timeout(None)?;
     let mut reader = stream.try_clone()?;
     let (tx, rx) = mpsc::sync_channel(2);
     thread::spawn(move || loop {
@@ -47,9 +52,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Native macOS window creation stays on the main thread.
     let mut window = Window::new(
         "Waytransfer — close window to disconnect",
-        WIDTH,
-        HEIGHT,
-        WindowOptions::default(),
+        decoder.size.width as usize,
+        decoder.size.height as usize,
+        WindowOptions {
+            resize: true,
+            ..WindowOptions::default()
+        },
     )?;
     window.set_target_fps(60);
     // Input writes use a bounded queue so a slow network cannot freeze the UI.
@@ -62,7 +70,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     });
-    let mut decoder = Decoder::default();
+    let mut resize =
+        viewer_input::ResizeTracker::new(window.get_size(), decoder.size, Instant::now());
     let mut previous = None;
     let mut keys = Vec::new();
     let mut buttons = (false, false);
@@ -74,6 +83,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             Err(mpsc::TryRecvError::Disconnected) => return Err("sender disconnected".into()),
             Err(mpsc::TryRecvError::Empty) => {}
         }
+        if let Some(size) = resize.observe(window.get_size(), Instant::now()) {
+            // There may be an older request queued but not yet written.
+            pending.retain(|message| !matches!(message, Message::Resize { .. }));
+            pending.push_back(Message::Resize { size });
+        }
         let focused = viewer_input::window_focused(&window);
         if active != Some(focused) {
             pending.push_back(Message::Focus { active: focused });
@@ -83,8 +97,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             buttons = (false, false);
         }
         if focused {
-            if let Some((x, y)) = window.get_mouse_pos(MouseMode::Clamp) {
-                let state = (x as u16, y as u16, window.get_mouse_down(MouseButton::Left));
+            if let Some((x, y)) = window.get_unscaled_mouse_pos(MouseMode::Clamp) {
+                let (x, y) = viewer_input::map_pointer(x, y, window.get_size(), decoder.size);
+                let state = (x, y, window.get_mouse_down(MouseButton::Left));
                 if previous != Some(state) {
                     // Coalesce motion only; preserve every observed button transition.
                     if matches!(pending.back(), Some(Message::Pointer { pressed, .. }) if *pressed == state.2)
@@ -144,7 +159,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         if pending.len() > 256 {
             return Err("Input backlog exceeded limit; reconnect when network recovers".into());
         }
-        window.update_with_buffer(&decoder.pixels, WIDTH, HEIGHT)?;
+        window.update_with_buffer(
+            &decoder.pixels,
+            decoder.size.width as usize,
+            decoder.size.height as usize,
+        )?;
     }
     stream.shutdown(Shutdown::Both)?;
     Ok(())

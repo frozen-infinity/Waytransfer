@@ -1,5 +1,7 @@
 //! A single viewer session; only raw snapshots may be coalesced, never encoded deltas.
-use crate::{handshake, read_message_limit, write_message, Encoder, Message, HEIGHT, WIDTH};
+use crate::{
+    handshake, read_message_limit, write_message, Dimensions, Encoder, Message, MAX_DIMENSION,
+};
 use std::{
     io,
     net::{Shutdown, TcpListener, TcpStream},
@@ -17,7 +19,7 @@ pub enum RemoteEvent {
     Disconnected,
 }
 struct Shared {
-    frame: Mutex<(u64, Vec<u32>)>,
+    frame: Mutex<(u64, Dimensions, Vec<u32>)>,
     changed: Condvar,
     stop: AtomicBool,
     stream: Mutex<Option<TcpStream>>,
@@ -30,11 +32,15 @@ pub struct RemoteServer {
 }
 impl RemoteServer {
     pub fn bind(address: &str) -> io::Result<Self> {
+        Self::bind_sized(address, Dimensions::default())
+    }
+    pub fn bind_sized(address: &str, size: Dimensions) -> io::Result<Self> {
+        let size = size.validate()?;
         let listener = TcpListener::bind(address)?;
         let address = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let shared = Arc::new(Shared {
-            frame: Mutex::new((1, vec![0x18202c; WIDTH * HEIGHT])),
+            frame: Mutex::new((1, size, vec![0x18202c; size.pixel_count()])),
             changed: Condvar::new(),
             stop: AtomicBool::new(false),
             stream: Mutex::new(None),
@@ -69,8 +75,9 @@ impl RemoteServer {
                         while let Ok(message) = read_message_limit(&mut reader, 4096) {
                             let valid = match &message {
                                 Message::Pointer { x, y, .. } => {
-                                    (*x as usize) < WIDTH && (*y as usize) < HEIGHT
+                                    (*x as usize) < MAX_DIMENSION && (*y as usize) < MAX_DIMENSION
                                 }
+                                Message::Resize { size } => size.validate().is_ok(),
                                 Message::Keys { held } => {
                                     held.len() <= 128
                                         && held.iter().all(|key| (1..=127).contains(key))
@@ -113,13 +120,14 @@ impl RemoteServer {
                                 break;
                             }
                             revision = frame.0;
-                            let pixels = frame.1.clone();
+                            let size = frame.1;
+                            let pixels = frame.2.clone();
                             drop(frame);
-                            if let Some(message) = encoder.encode(&pixels)? {
+                            if let Some(message) = encoder.encode_sized(size, &pixels)? {
                                 let bytes = write_message(&mut stream, &message)?;
                                 println!(
                                     "Update: {bytes} bytes (raw frame: {})",
-                                    WIDTH * HEIGHT * 4
+                                    size.pixel_count() * 4
                                 );
                             }
                         }
@@ -149,16 +157,21 @@ impl RemoteServer {
         self.address
     }
     pub fn publish(&self, pixels: Vec<u32>) -> io::Result<()> {
-        if pixels.len() != WIDTH * HEIGHT {
+        self.publish_sized(Dimensions::default(), pixels)
+    }
+    pub fn publish_sized(&self, size: Dimensions, pixels: Vec<u32>) -> io::Result<()> {
+        let size = size.validate()?;
+        if pixels.len() != size.pixel_count() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "wrong frame size",
             ));
         }
         let mut frame = self.shared.frame.lock().unwrap();
-        if frame.1 != pixels {
+        if frame.1 != size || frame.2 != pixels {
             frame.0 += 1;
-            frame.1 = pixels;
+            frame.1 = size;
+            frame.2 = pixels;
             self.shared.changed.notify_one();
         }
         Ok(())

@@ -1,74 +1,140 @@
 # Waytransfer
 
-An open-source Rust experiment for using Linux applications from a MacBook over
-limited bandwidth. **This initial vertical slice is a synthetic remote display,
-not a Wayland compositor, screen capture tool, or application remoting system.**
+Open-source Rust software for using Linux applications from a MacBook over limited
+bandwidth. This branch adds an **experimental headless, single-window Wayland
+compositor** alongside the original square demo.
 
-## Try it
+A Linux application runs in a separate Wayland session. Its shared-memory buffers
+are composed in software on Linux and sent as lossless compressed tile deltas to
+the Mac. The Mac displays the result in a native window and sends input back.
 
-Install stable Rust. On Linux (OMEN) run:
+## Run a real application
+
+Use stable Rust (1.95 or newer), and build the same branch on both machines.
+**Wire protocol v2 requires rebuilding both sides; the original v1 viewer cannot
+connect.** Stop the original demo sender before starting the compositor on its port.
+
+On Arch Linux / the OMEN, install build/runtime dependencies:
 
 ```sh
-cargo run --release --bin sender
+sudo pacman -S --needed base-devel pkgconf pixman libxkbcommon xkeyboard-config weston
+cargo run --release --features compositor --bin compositor -- -- weston-terminal
 ```
 
-The sender binds loopback by default. Use an SSH tunnel from the MacBook:
+On Debian/Ubuntu, the compositor dependencies are `build-essential pkg-config
+libpixman-1-dev libxkbcommon-dev xkb-data weston`. The Linux sender needs no GPU,
+DRM device, running desktop compositor or capture permission. `XDG_RUNTIME_DIR`
+must point to your private user runtime directory (normally `/run/user/$(id -u)`).
+For a headless SSH session that does not provide one, create a private directory:
+
+```sh
+mkdir -p /tmp/waytransfer-$(id -u)
+chmod 700 /tmp/waytransfer-$(id -u)
+export XDG_RUNTIME_DIR=/tmp/waytransfer-$(id -u)
+```
+
+From the MacBook, create an SSH tunnel:
 
 ```sh
 ssh -N -L 7878:127.0.0.1:7878 your-user@your-omen
 ```
 
-In another MacBook terminal, from this repository:
+In another MacBook terminal:
 
 ```sh
 cargo run --release --features viewer --bin viewer -- 127.0.0.1:7878
 ```
 
-Move the pointer inside the window; the sender redraws a square at that location.
-Hold the left button to change its color. Escape closes the viewer. Window movement
-and display refresh happen locally. The content itself is rasterized on the sender.
-There is no font/vector command transport or Metal renderer yet.
+Type into the remote terminal, click, select text or scroll. **Escape now goes to
+the application; close the native viewer window to disconnect.** Switching away
+from the viewer releases held keys/buttons. Reconnecting gets a fresh full frame.
+The application continues while the viewer is disconnected. Ctrl-C in the Linux
+compositor terminal ends the session and stops the directly launched application.
+When that application exits, the compositor exits too.
 
-Both programs also run on one Mac for a loopback demonstration. Linux sender has
-no desktop library dependency. Linux viewer builds require X11/Wayland development
-libraries (see CI). Viewer uses minifb's native platform window support.
+Choose another software-rendered Wayland application after `--`:
 
-For a GUI-free end-to-end smoke check with the sender already running:
+```sh
+cargo run --release --features compositor --bin compositor -- -- your-wayland-app arg1
+```
+
+The launcher sets `GDK_BACKEND=wayland`, `GSK_RENDERER=cairo`,
+`GDK_DEBUG=gl-disable`, `QT_QPA_PLATFORM=wayland`, `QT_QUICK_BACKEND=software`
+and `QT_WAYLAND_DISABLE_WINDOWDECORATION=1` for its child only. These are helpful
+software-backend defaults, **not a guarantee that every GTK/Qt application works**.
+Avoid applications that forward launches to an already-running instance; they may
+open on your existing desktop instead of this session.
+
+For manual launches, start without a command:
+
+```sh
+cargo run --release --features compositor --bin compositor -- --socket waytransfer-0
+WAYLAND_DISPLAY=waytransfer-0 weston-terminal
+```
+
+Run the second command in another Linux terminal with the same `XDG_RUNTIME_DIR`.
+Additional options: `--listen 127.0.0.1:7878`, `--socket waytransfer-0`, `--help`.
+Direct TCP is unauthenticated and unencrypted; use the SSH tunnel for remote use.
+
+## Current support and limits
+
+- One xdg-shell toplevel, requested at 640×400, scale 1. Extra toplevels receive a
+  close request. Dialogs requiring another toplevel are therefore unsupported.
+- Smithay handles surface commits, SHM buffers and subsurface state. Pixman renders
+  the surface tree; popup positioning/rendering/grabs are implemented but have not
+  yet received the same integration coverage as the main window.
+- Pointer motion, three mouse buttons, scrolling and basic physical keyboard input.
+  US layout only; no IME/text composition, layout negotiation or macOS shortcut
+  translation. OS-reserved shortcuts may stay on the Mac. Custom remote cursor
+  images are not rendered; the viewer uses its local pointer.
+- No DMA-BUF/EGL/OpenGL clients, XWayland/X11, existing-desktop capture, window
+  resizing, HiDPI, multiwindow management or clipboard exchange with macOS.
+  GPU applications such as Kitty and X11 applications such as some IDE builds need
+  further backend work. Start testing with `weston-terminal`.
+- Linux content rendering and Mac presentation are working; application font/vector
+  draw commands are not forwarded and there is no Metal renderer yet.
+
+This is real Wayland application hosting with a deliberately limited scope, not a
+replacement for a production desktop compositor. It creates its own session and
+does not take over the OMEN's existing desktop.
+
+## Bandwidth and responsiveness
+
+640×400 frames are split into 32×32 tiles, including partial edge tiles. Exact
+comparison skips unchanged tiles; changed tiles use lossless LZ4 compression.
+Idle content sends zero frame bytes. There is no persistent tile deduplication yet.
+JSON length-prefixed messages are readable but add byte-array overhead.
+
+The compositor renders on surface commits at up to 30 ticks/second. A network
+worker holds the latest raw framebuffer snapshot and encodes only the snapshots
+it sends. It can skip intermediate raw frames without dropping encoded deltas or
+breaking sequence numbers. Bounded input queues and separate network workers keep
+slow writes out of the Wayland/UI loops. Input transitions are retained; excessive
+viewer backlog closes the connection with an error instead of silently losing keys.
+
+Each reconnect resets the encoder and starts with a complete frame. Packet lengths,
+tile coordinates, sequence numbers and decompressed sizes are checked before an
+update changes the client framebuffer. Sender logs actual message bytes versus
+1,024,000 raw frame bytes. RTT still limits input response; these mechanisms reduce
+bandwidth, not the network's round-trip delay.
+
+## Original square demo
+
+Both commands can run on one Mac, as before:
+
+```sh
+cargo run --release --bin sender
+cargo run --release --features viewer --bin viewer -- 127.0.0.1:7878
+```
+
+The GUI-free `viewer --headless` check is specific to the square demo, not the real
+compositor:
 
 ```sh
 cargo run --features viewer --bin viewer -- 127.0.0.1:7878 --headless
 ```
 
-An optional sender address argument selects the listening interface. Direct network
-connections are unencrypted and unauthenticated; use the SSH tunnel for remote use.
-The demo serves one client at a time and accepts a new session after disconnect.
-
-## What the slice implements
-
-- Shared versioned messages, bidirectional TCP handshake, length-prefixed JSON.
-- 640×400 fixed-size frames split into 32×32 tiles (including partial edge tiles).
-- Exact comparison against the previous frame: only changed tiles are sent.
-- Lossless LZ4 compression per changed tile; unchanged frames send zero bytes.
-- Client retains a framebuffer and applies ordered deltas atomically.
-- Pointer movement/button input travels back to the sender. No keyboard injection.
-- Bounded packet lengths and decompression output, coordinate/sequence validation,
-  bounded viewer queues, separate network workers and native UI thread.
-
-The initial update contains all tiles. Every new connection resets state and gets
-a full frame; TCP provides ordering, so no lossy-network recovery protocol is needed
-in this version. Each compressed block has an exact expected output size derived
-from its coordinates. JSON byte arrays add overhead; this is a readable prototype
-wire format, not a final interoperable standard. Protocol v1 has fixed dimensions,
-no capability negotiation, and no persistent/content-addressed tile cache.
-
-Sender logs actual encoded bytes per update versus 1,024,000 raw frame bytes.
-Tests verify that the synthetic initial frame uses less than 20% of raw bytes and
-a one-pixel pointer movement uses less than 10 KB. These are synthetic checks,
-not real application benchmarks or promises about wireless latency. RTT still
-limits remote input response; moving rendering to the Mac alone cannot remove it.
-The sender scans a complete frame per input; optimize CPU/damage tracking later.
-
-## Validation
+## Validation and contributions
 
 ```sh
 cargo fmt --check
@@ -77,11 +143,22 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --locked --all-features
 ```
 
-CI runs these on Linux and macOS. Tests cover lossless reconstruction, edge tiles,
-idle suppression, small deltas, truncation/oversize packets, invalid updates and a
-real loopback TCP exchange with pointer input. GUI behavior requires a manual
-window test; CI does not assert rendering or Linux application compatibility.
+Linux tests include an independent Wayland SHM client, pixel-exact reconstruction
+across TCP, pointer clicks, keyboard press/release, frame callbacks, focus loss and
+viewer disconnect/reconnect. Linux CI also starts the actual compositor binary and
+`weston-terminal`, renders its pixels and executes a remotely typed shell command:
 
-See [ROADMAP.md](ROADMAP.md). Contributions are welcome; keep changes testable and
-report bandwidth measurements with workload, frame size and network conditions.
-Licensed under [MIT](LICENSE).
+```sh
+WAYTRANSFER_TEST_WESTON=1 cargo test --locked --features compositor --test real_app -- --nocapture
+```
+
+macOS CI builds/tests the viewer and shared transport. Linux viewer builds additionally
+need X11/Wayland development libraries listed in CI. A Mac-to-physical-OMEN GUI test
+is still required; headless CI cannot verify native window appearance or the local
+keyboard mapping on your hardware.
+
+See [VALIDATION.md](VALIDATION.md) and [ROADMAP.md](ROADMAP.md). Contributions are
+welcome; report workload, dimensions, bytes/update and network conditions with
+bandwidth claims. MIT licensed; thanks to [Smithay](https://github.com/Smithay/smithay)
+for the Wayland building blocks and [Pixman](https://www.pixman.org/) for software
+composition.

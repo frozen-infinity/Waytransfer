@@ -1,7 +1,7 @@
 //! Versioned, bounded transport and lossless dirty-tile reconstruction.
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 pub const WIDTH: usize = 640;
 pub const HEIGHT: usize = 400;
 pub const TILE: usize = 32;
@@ -11,9 +11,33 @@ fn invalid(s: &str) -> io::Error {
 }
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum Message {
-    Hello { version: u16 },
-    Frame { sequence: u64, tiles: Vec<Tile> },
-    Pointer { x: u16, y: u16, pressed: bool },
+    Hello {
+        version: u16,
+    },
+    Frame {
+        sequence: u64,
+        tiles: Vec<Tile>,
+    },
+    Pointer {
+        x: u16,
+        y: u16,
+        pressed: bool,
+    },
+    /// Full held-key snapshot. Evdev codes (not XKB codes); US layout initially.
+    Keys {
+        held: Vec<u16>,
+    },
+    Buttons {
+        right: bool,
+        middle: bool,
+    },
+    Scroll {
+        horizontal: i16,
+        vertical: i16,
+    },
+    Focus {
+        active: bool,
+    },
 }
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Tile {
@@ -30,11 +54,15 @@ pub fn write_message(mut w: impl Write, message: &Message) -> io::Result<usize> 
     w.write_all(&data)?;
     Ok(data.len() + 4)
 }
-pub fn read_message(mut r: impl Read) -> io::Result<Message> {
+pub fn read_message(r: impl Read) -> io::Result<Message> {
+    read_message_limit(r, MAX_PACKET)
+}
+/// Apply a smaller limit for control/input channels before allocating the body.
+pub fn read_message_limit(mut r: impl Read, limit: usize) -> io::Result<Message> {
     let mut header = [0; 4];
     r.read_exact(&mut header)?;
     let len = u32::from_be_bytes(header) as usize;
-    if len == 0 || len > MAX_PACKET {
+    if len == 0 || len > limit.min(MAX_PACKET) {
         return Err(invalid("invalid packet length"));
     }
     let mut data = vec![0; len];
@@ -174,3 +202,9 @@ pub fn demo_frame(x: usize, y: usize, pressed: bool) -> Vec<u32> {
     }
     pixels
 }
+
+#[cfg(all(target_os = "linux", feature = "compositor"))]
+pub mod compositor;
+pub mod remote;
+#[cfg(feature = "viewer")]
+pub mod viewer_input;

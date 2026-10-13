@@ -27,6 +27,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     {
                         send(&mut stream, x as usize, y as usize, pressed)?
                     }
+                    Message::Keys { .. }
+                    | Message::Buttons { .. }
+                    | Message::Scroll { .. }
+                    | Message::Focus { .. } => {}
                     _ => return Err("unexpected client message".into()),
                 }
             }

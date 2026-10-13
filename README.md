@@ -136,6 +136,11 @@ NVIDIA compatibility. Kitty, IDEs and hardware DMA-BUF paths still need testing.
 
 ## JetBrains IDEs and application backend selection
 
+New toplevels start as normal windows. Maximize/fullscreen and their reverse
+requests receive configure responses; these states apply within the current remote
+canvas. X11 focus also raises the selected X11 window so sibling windows cannot
+intercept clicks at the shared remote origin.
+
 The session implements `wp_viewporter` (buffer cropping/scaling) and
 `wp_fractional_scale_v1` (preferred scale currently 1). JetBrains' native Wayland
 runtime [requires viewporter during startup](https://github.com/JetBrains/JetBrainsRuntime/blob/44bb04f436c955532a14d7afd8b2387453c887c3/src/java.desktop/unix/native/libawt_wlawt/WLToolkit.c#L943).

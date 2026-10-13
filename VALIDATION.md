@@ -164,6 +164,11 @@ release distribution, checks its pinned SHA-512, and compiles the MIT-licensed
 windows and a transient parent relationship, typed characters received in the
 correct JTextField, no input crossing between windows, resize and independent
 close. Native `WLToolkit` and launcher-selected `XToolkit` are tested separately.
+The two X11 windows deliberately share an origin: raising the focused window in
+XWayland is required so sibling windows cannot intercept its pointer clicks.
+The test waits for the asynchronous Java text-field focus handshake before typing.
+Window resize is checked through both a Java component-resize marker and painted
+pixels at the new dimensions, rather than just server metadata.
 The native test cannot pass by silently falling back to X11: its toolkit class is
 asserted. `WAYTRANSFER_TEST_JBR` points to a JBRSDK locally; absent it, Java tests
 are skipped. Linux CI supplies it, so those tests are required there.

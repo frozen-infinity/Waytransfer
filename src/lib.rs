@@ -336,3 +336,7 @@ pub mod client_scene;
 pub mod keyboard_focus;
 #[cfg(all(target_os = "linux", feature = "x11"))]
 pub mod x11;
+
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub mod desktop;
+pub mod desktop_frame;

@@ -146,7 +146,7 @@ cargo run --features viewer --bin viewer -- 127.0.0.1:17879
 Press/release A in each titled window, resize one, then close one. The probe checks
 scoped focus/key messages, resize/reset and the surviving window. Inspect native
 appearance, parent dialogs and pointer behavior separately on actual hardware.
-Whole Hyprland/desktop capture remains a roadmap item, not implemented support.
+Whole-desktop capture is covered by the later milestone below.
 
 ## Toolkit compatibility and CLion startup
 
@@ -177,3 +177,35 @@ This does not launch the CLion product or exercise its project indexing, plugins
 GPU drivers or all dialogs/menus. The user's follow-up hardware check remains
 necessary. Mac presentation code and wire version stay unchanged. Consult the
 PR checks for final results.
+
+## Whole-desktop capture and separate Hyprland launcher
+
+macOS all-feature tests/builds and Clippy cover the frame conversion, normalized
+pointer mapping and viewer. Linux CI runs `WAYTRANSFER_TEST_DESKTOP=1 cargo test
+--all-features --test desktop_session`: it launches a real isolated headless Sway
+with software rendering, captures wallpaper pixels through wlr-screencopy SHM,
+opens weston-terminal using virtual-keyboard compositor bindings, types commands
+whose marker files prove execution, clicks a compositor mouse binding, switches
+between empty and occupied workspaces, downsamples capture after viewer resizing,
+and reconnects after disconnecting with Shift held. Closing the viewer must leave
+the capture process running. These use the actual desktop executable and v5 TCP
+codec, not injected frame arrays. An unset environment variable skips this local
+integration test; CI requires it.
+
+Frame conversion tests cover row padding, vertical inversion, RGB/BGR channels,
+10-bit packed formats, aspect-preserving downsampling and malformed buffer limits.
+Launcher tests use controlled child processes to check private sockets/runtimes,
+parent connection, disabled physical-seat access, argument passing, cleanup on
+normal exit and startup failure. CI also checks shell syntax/ShellCheck and Lua
+syntax. Those process fixtures do not run Hyprland.
+
+The launcher targets Hyprland 0.56.0's Lua API and uses a GPU-backed private headless
+Sway parent for Aquamarine's Wayland allocator. API/backend assumptions were checked
+against upstream [Hyprland 0.56 source](https://github.com/hyprwm/Hyprland/tree/v0.56.0)
+and [Aquamarine backend sources](https://github.com/hyprwm/aquamarine/tree/main/src/backend).
+Actual nested Hyprland, physical DMA-BUF/GPU drivers (especially NVIDIA), custom
+user configs, native Mac desktop presentation and wide-area performance have not
+been validated in this environment. The real Sway test establishes the capture,
+virtual-input and transport path; it does not establish that every Hyprland/GPU
+combination can launch. Keep the supplied separate config for the first hardware
+check before introducing personal startup scripts or services.

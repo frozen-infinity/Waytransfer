@@ -10,6 +10,9 @@ Delivered (experimental):
   DMA-BUF import; optional rootless XWayland with per-window input/focus.
 - Viewport crop/scale and scale-1 fractional notifications; explicit GTK/Qt/Java
   X11 launch profile and JetBrains Runtime native/X11 regression fixtures.
+- Whole-output lossless capture, virtual keyboard/pointer, workspace control,
+  reconnect and an isolated nested Hyprland 0.56 Lua launcher. Real headless Sway
+  integration coverage; actual Hyprland/GPU launcher validation remains pending.
 - Shared transport tests, independent Wayland client tests and actual application
   smoke tests. See VALIDATION.md for verified paths and outstanding hardware checks.
 
@@ -23,11 +26,10 @@ Next:
 3. **Bandwidth:** scroll/copy detection, bounded tile cache, configurable refresh
    budget, realistic editor workloads, measured input latency on constrained links.
    Fuzz decoders and bound client-side Wayland resources.
-4. **Whole Hyprland mode:** a separate desktop/output stream, initially from a
-   nested Hyprland session or a supported capture/input integration. Preserve the
-   full desktop, workspace animations, panels and compositor shortcuts in one Mac
-   viewport. Choose and validate the capture/control APIs before implementation;
-   the per-application session here does not host Hyprland or capture an existing one.
+4. **Desktop mode:** validate nested Hyprland 0.56 on physical OMEN/GPU drivers,
+   including NVIDIA, with real Lua configs. Add compositor resolution negotiation,
+   cursor images, multiple outputs and newer image-copy capture APIs. Measure busy
+   desktop bandwidth and CPU cost, and improve launcher/process lifecycle handling.
 5. **Rendering on Mac:** measured GPU presentation and optional semantic/vector
    operations for cooperating toolkits. Ordinary Wayland clients submit rendered
    buffers; forwarding Wayland cannot expose their drawing commands.

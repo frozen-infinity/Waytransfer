@@ -230,6 +230,13 @@ impl RemoteServer {
     pub fn local_addr(&self) -> std::net::SocketAddr {
         self.address
     }
+    /// End only the current viewer connection; retained scene and listener survive.
+    pub fn disconnect_viewer(&self) -> io::Result<()> {
+        if let Some(stream) = self.shared.stream.lock().unwrap().as_ref() {
+            stream.shutdown(Shutdown::Both)?;
+        }
+        Ok(())
+    }
     pub fn publish(&self, pixels: Vec<u32>) -> io::Result<()> {
         self.publish_sized(Dimensions::default(), pixels)
     }

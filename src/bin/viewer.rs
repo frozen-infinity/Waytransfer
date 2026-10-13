@@ -27,9 +27,13 @@ fn scoped(multi: bool, id: u32, message: Message) -> Message {
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let headless = std::env::args().any(|arg| arg == "--headless");
+    let desktop = std::env::args().any(|arg| arg == "--desktop");
+    if headless && desktop {
+        return Err("--headless is a demo check; use --desktop for desktop sessions".into());
+    }
     let addr = std::env::args()
         .skip(1)
-        .find(|arg| arg != "--headless")
+        .find(|arg| arg != "--headless" && arg != "--desktop")
         .unwrap_or_else(|| {
             std::env::var("WAYTRANSFER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:7878".into())
         });
@@ -80,6 +84,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let tick = Instant::now();
         for _ in 0..32 {
             match rx.try_recv() {
+                Ok(Err(_)) if native.is_empty() && !scene.closing.is_empty() => return Ok(()),
                 Ok(message) => {
                     scene.apply(message?)?;
                 }
@@ -184,8 +189,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             let decoder = &scene.windows[&id].decoder;
             if let Some((x, y)) = client.window.get_unscaled_mouse_pos(MouseMode::Clamp) {
-                let (x, y) =
-                    viewer_input::map_pointer(x, y, client.window.get_size(), decoder.size);
+                let (x, y) = if desktop {
+                    viewer_input::map_desktop_pointer(x, y, client.window.get_size())
+                } else {
+                    viewer_input::map_pointer(x, y, client.window.get_size(), decoder.size)
+                };
                 let state = (x, y, client.window.get_mouse_down(MouseButton::Left));
                 if client.pointer != Some(state) {
                     pending.push_back(scoped(

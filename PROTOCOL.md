@@ -85,3 +85,15 @@ example, Focus(false) is exactly:
 This format removes JSON decimal-array overhead. It adds no lossy compression or
 new tile cache; those are separate decisions. Stream boundaries are defined by
 length prefixes, never by individual TCP reads or writes.
+
+## Desktop mode (v5 framing)
+
+The desktop server sends one scoped window (ID 1) for the selected output using
+existing lifecycle and frame messages. Start the viewer with `--desktop`: Pointer
+x/y are normalized to a fixed 2048×2048 extent instead of framebuffer pixels.
+This mode is selected out of band on both executables; there is no new wire tag or
+automatic mode negotiation. Rebuild the viewer for desktop use. Normal application
+mode retains pixel coordinates. The fixed extent keeps input aligned when captures
+are downsampled or a resize frame is still in flight. Resize adjusts the maximum
+encoded size, never the compositor's output mode. Close disconnects the viewer
+without closing applications or stopping the desktop; reconnect resets the frame.

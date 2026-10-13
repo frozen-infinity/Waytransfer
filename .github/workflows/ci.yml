@@ -11,6 +11,7 @@ jobs:
     timeout-minutes: 10
     env:
       LIBGL_ALWAYS_SOFTWARE: "1"
+      WAYTRANSFER_TEST_DESKTOP: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
       WAYTRANSFER_TEST_GPU: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
       WAYTRANSFER_TEST_WESTON: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
     steps:
@@ -20,7 +21,7 @@ jobs:
           components: rustfmt, clippy
       - name: Linux viewer dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev libpixman-1-dev weston xwayland xterm x11-utils libegl1-mesa-dev libgles2-mesa-dev mesa-utils-extra libgtk-3-0 libvulkan1 fonts-dejavu-core
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxi-dev libwayland-dev libxkbcommon-dev libpixman-1-dev weston xwayland xterm x11-utils libegl1-mesa-dev libgles2-mesa-dev mesa-utils-extra libgtk-3-0 libvulkan1 fonts-dejavu-core sway swaybg shellcheck lua5.4
       - name: Install pinned JetBrains Runtime for real Java compatibility tests
         if: runner.os == 'Linux'
         shell: bash
@@ -31,6 +32,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/waytransfer-jbr"
           tar -xzf "$archive" --strip-components=1 -C "$RUNNER_TEMP/waytransfer-jbr"
           echo "WAYTRANSFER_TEST_JBR=$RUNNER_TEMP/waytransfer-jbr" >> "$GITHUB_ENV"
+      - name: Check headless launcher and Lua example
+        if: runner.os == 'Linux'
+        run: |
+          bash -n scripts/headless-hyprland.sh
+          shellcheck scripts/headless-hyprland.sh
+          luac5.4 -p examples/headless-hyprland.lua
       - run: cargo fmt --check
       - run: cargo test --locked --all-features
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
@@ -38,6 +45,7 @@ jobs:
       - name: Check optional Linux backend combinations
         if: runner.os == 'Linux'
         run: |
+          cargo clippy --locked --lib --bins --features desktop -- -D warnings
           cargo clippy --locked --lib --bins --features compositor -- -D warnings
           cargo clippy --locked --lib --bins --features compositor,x11 -- -D warnings
           cargo clippy --locked --lib --bins --features compositor,gpu -- -D warnings

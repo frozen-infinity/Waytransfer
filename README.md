@@ -1,8 +1,8 @@
 # Waytransfer
 
 Open-source Rust software for using Linux applications from a MacBook over limited
-bandwidth. This branch adds an **experimental headless, multiwindow Wayland
-compositor** alongside the original square demo.
+bandwidth. Includes an **experimental multiwindow Wayland compositor** and a
+**whole-desktop capture mode** for a separate headless Hyprland session.
 
 A Linux application runs in a separate Wayland session. Its buffers
 are composed on Linux (software by default, optional EGL/GLES) and sent as lossless compressed tile deltas to
@@ -195,9 +195,83 @@ still fails. Instance forwarding can open an existing desktop instance instead.
   supported by the driver. Optional XWayland window management and keyboard focus.
 - Application font/vector commands are not forwarded; there is no Metal renderer.
 
-This hosts real applications in a separate experimental session. Whole-desktop
-Hyprland streaming is a future separate mode; it does not capture or replace the
-OMEN's current desktop. It is not a production desktop compositor.
+The application mode hosts real applications in a separate experimental session.
+Desktop mode below uses Hyprland itself for desktop behavior. Both remain experimental.
+
+## Separate headless Hyprland desktop (experimental)
+
+For Hyprland **0.56.0 with Lua config**, desktop mode presents the complete output
+in one Mac window: tiled applications, workspaces, panels and compositor shortcuts.
+Hyprland renders on the OMEN; Waytransfer captures pixels and forwards virtual input.
+The existing per-application mode still opens independent native Mac windows.
+
+On the OMEN, build this branch and install the private-display dependencies:
+
+```sh
+sudo pacman -S --needed sway kitty libxkbcommon xkeyboard-config pkgconf
+cargo build --release --features desktop --bin desktop
+mkdir -p ~/.config/waytransfer
+cp examples/headless-hyprland.lua ~/.config/waytransfer/headless.lua
+./scripts/headless-hyprland.sh --config ~/.config/waytransfer/headless.lua
+```
+
+Run this inside a persistent terminal (for example tmux) when connecting over SSH.
+The launcher starts a private GPU-backed headless Sway display, then a nested
+Hyprland session. Hyprland 0.56 needs that parent for its rendering allocator;
+this is not a standalone software-only Hyprland backend. GPU render-node access
+is required. The launcher disables Hyprland's physical DRM/seat acquisition and
+uses private sockets, so it can run alongside your ordinary desktop.
+
+Start with the supplied Lua file, then customize that **separate copy**. Its Alt+Enter
+opens Kitty, Alt+1–5 switches workspaces, Alt+Shift+1–5 moves windows, and Alt+Q
+closes the focused application. macOS may intercept some shortcuts. The launcher
+wraps this config with screencopy permission for the exact capture executable.
+It does not edit your ordinary Hyprland configuration. This is a separate display
+session under the same Linux user, sharing home files and application settings;
+single-instance applications can still reuse a process on another desktop.
+
+On the Mac, build the viewer from this branch and connect through SSH:
+
+```sh
+# Leave this tunnel running in another terminal; replace USER and OMEN_HOST.
+ssh -N -L 7878:127.0.0.1:7878 USER@OMEN_HOST
+cargo run --release --features viewer --bin viewer -- --desktop 127.0.0.1:7878
+```
+
+The `--desktop` flag is required for resolution-independent pointer input.
+Closing the Mac window disconnects the viewer; the Linux desktop remains running
+and reconnecting sends its current complete frame. Ctrl-C in the launcher stops
+its owned capture/compositor processes. Only one viewer connects at a time.
+SSH supplies encryption/authentication; keep the listener on loopback. Connecting
+from elsewhere requires a reachable SSH host or a private VPN; this does not add
+NAT traversal or an Internet relay.
+
+Default output is 1280×720 from the sample config, captured at up to 15 FPS.
+Changing the Mac window size changes the stream's downsampling bound, preserving
+aspect ratio; it does **not** change Hyprland's monitor resolution. The viewer
+stretches that framebuffer to its window. Capture is capped at 2048 per side and
+2,097,152 transmitted pixels. Lower FPS/size saves bandwidth, but busy workspace
+animations can change most tiles. Unchanged frames send no frame packets; capture
+and comparison still consume Linux CPU/GPU time. Audio, clipboard, remote cursor
+shapes, IME, multi-monitor aggregation and HiDPI negotiation are not implemented.
+
+Launcher options and capture settings:
+
+```sh
+./scripts/headless-hyprland.sh --config ~/.config/waytransfer/headless.lua \
+  --listen 127.0.0.1:7879 -- --fps 10 --size 1280x720 --layout us
+# Capture binary can also attach to an explicitly selected compatible session:
+cargo run --release --features desktop --bin desktop -- --list-outputs
+cargo run --release --features desktop --bin desktop -- --output OUTPUT_NAME --view-only
+```
+
+Direct attachment uses the current `WAYLAND_DISPLAY`; select it deliberately.
+Capture requires `wlr-screencopy`, SHM buffers and permission; control additionally
+requires output-bound `wlr-virtual-pointer` v2 and `zwp-virtual-keyboard` v1.
+View-only mode does not create input devices. Unsupported formats/protocols or
+capture denial produce errors. See [VALIDATION.md](VALIDATION.md): real Sway
+capture/input is tested in CI, while the nested Hyprland launcher still needs
+validation on the OMEN's GPU, especially proprietary NVIDIA.
 
 ## Bandwidth and responsiveness
 

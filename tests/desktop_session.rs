@@ -235,6 +235,7 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
         assert!(Instant::now() < deadline, "desktop pointer binding failed");
         thread::sleep(Duration::from_millis(20));
     }
+    eprintln!("desktop phase: workspace 2");
     keys(&mut viewer, vec![125, 3]);
     keys(&mut viewer, vec![]);
     while scene.windows[&1]
@@ -245,6 +246,7 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
     {
         read_scene(&mut viewer, &mut scene, &log);
     }
+    eprintln!("desktop phase: workspace 1");
     keys(&mut viewer, vec![125, 2]);
     keys(&mut viewer, vec![]);
     while scene.windows[&1]
@@ -282,4 +284,31 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
     send(&mut viewer, Message::Close);
     assert!(read_message(&mut viewer).is_err());
     assert!(desktop.0.try_wait().unwrap().is_none());
+}
+
+fn sway_state(runtime: &std::path::Path) -> String {
+    let socket = fs::read_dir(runtime).unwrap().flatten().find(|entry| {
+        entry.file_name().to_string_lossy().starts_with("sway-ipc")
+            && entry.file_type().is_ok_and(|t| t.is_socket())
+    });
+    let Some(socket) = socket else {
+        return "no Sway IPC socket".into();
+    };
+    ["get_workspaces", "get_tree"]
+        .into_iter()
+        .map(|kind| {
+            let output = Command::new("swaymsg")
+                .args(["-s", socket.path().to_str().unwrap(), "-t", kind])
+                .output()
+                .unwrap();
+            format!(
+                "{kind}: {}",
+                String::from_utf8_lossy(&output.stdout)
+                    .chars()
+                    .take(8000)
+                    .collect::<String>()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }

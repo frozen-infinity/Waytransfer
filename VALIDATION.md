@@ -78,3 +78,30 @@ requested 1710×967, a new-size frame was delivered to the viewer, and A press/r
 the sender afterward. Repeat with `cargo run --example input_probe -- --resize`,
 connect the viewer to 127.0.0.1:17879, resize/zoom, then press and release A.
 The physical OMEN/Mac application resize still requires the user's hardware check.
+
+## Binary protocol (v4)
+
+The actual network path now uses a compact binary codec and raw LZ4 bytes, removing
+direct serde/serde_json dependencies. The packet ceiling shrinks from 40 MiB to
+12 MiB; input packets keep their 4 KiB limit. Existing lossless/reset/resize/input
+and reconnect tests exercise this same binary path.
+
+New tests pin independently written byte fixtures for all control messages and a
+one-pixel LZ4 frame; test concatenation, one-byte-at-a-time reads, truncation,
+unknown tags, noncanonical booleans, invalid dimensions/counts/keys/tile lengths,
+trailing bytes and invalid outgoing messages. A deterministic 8,192-packet malformed
+corpus must not panic. This is regression coverage, not a full fuzzing campaign.
+
+`cargo run --release --example bandwidth` compares the same compressed tile payloads
+using an exact v3 compact JSON reference envelope and the production v4 writer.
+Initial 640×400 frame: 41,808 → 12,247 bytes (70.7%); one-pixel movement:
+2,248 → 795 bytes (64.6%). Initial 1920×1080 frame: 283,138 → 80,363 bytes
+(71.6%); deterministic noise: 29,809,231 → 8,343,080 bytes (72.0%). Includes framing,
+excludes TCP/IP/SSH headers. Pixels remain exact. See README for the comparison
+method; this does not imply a corresponding latency or wireless-throughput gain.
+
+Local Apple Silicon build/tests/formatting/Clippy passed. Linux/macOS CI runs the
+same checks, including real Wayland SHM and weston-terminal input/resize tests.
+Consult the PR checks for the final revision. Native GUI focus/resize checks above
+were performed before the v4 codec change; the UI/event-handling code is unchanged.
+Physical OMEN/Mac v4 testing remains a hardware check.

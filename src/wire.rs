@@ -235,6 +235,11 @@ pub fn read_message_limit(mut reader: impl Read, limit: usize) -> io::Result<Mes
         8 => Message::Focus {
             active: cursor.boolean()?,
         },
+        b'{' => {
+            return Err(invalid(
+                "older JSON protocol detected; update both machines",
+            ))
+        }
         _ => return Err(invalid("unknown message tag")),
     };
     if !cursor.bytes.is_empty() {

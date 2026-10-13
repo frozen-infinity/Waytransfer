@@ -8,6 +8,8 @@ Delivered:
 - Native Mac viewer with pointer/buttons/scroll and basic US physical keyboard.
 - Background transport, bounded queues, raw-frame coalescing and full reconnect.
 - Dimension-bearing reset frames, debounced Mac resizing and bounded resolution.
+- Compact binary framing with measured reductions in synthetic wire bytes, golden
+  protocol fixtures, malformed-packet tests and reduced packet allocation limits.
 - Shared transport tests, independent Wayland-client integration test and a real
   weston-terminal smoke test in Linux CI.
 
@@ -18,7 +20,7 @@ Next:
    selection and IME. Expand popup/subsurface tests and test common GTK/Qt apps.
 2. **GPU and legacy applications:** EGL/DMA-BUF capture/rendering path and XWayland
    support. Benchmark software and GPU paths with terminals and IDEs before claims.
-3. **Bandwidth:** binary wire format, scroll/copy detection, bounded tile cache,
+3. **Bandwidth:** scroll/copy detection, bounded tile cache,
    configurable refresh budget, realistic editor workloads, input-to-display latency
    under constrained bandwidth and RTT. Fuzz decoders and bound Wayland resources.
 4. **Multiwindow:** native Mac windows per Linux toplevel, transient dialogs,

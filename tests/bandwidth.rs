@@ -18,3 +18,19 @@ fn binary_envelope_reduces_the_same_tile_payload_without_loss() {
         assert_eq!(decoder.pixels, pixels);
     }
 }
+
+#[test]
+fn v3_reference_envelope_matches_an_independent_json_fixture() {
+    let frame = Message::Frame {
+        sequence: 1,
+        size: Dimensions::new(1, 1).unwrap(),
+        reset: true,
+        tiles: vec![Tile {
+            x: 0,
+            y: 0,
+            data: vec![64, 51, 34, 17, 0],
+        }],
+    };
+    let json = r#"{"Frame":{"sequence":1,"size":{"width":1,"height":1},"reset":true,"tiles":[{"x":0,"y":0,"data":[64,51,34,17,0]}]}}"#;
+    assert_eq!(legacy_json::frame_bytes(&frame), json.len() + 4);
+}

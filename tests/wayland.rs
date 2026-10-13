@@ -155,12 +155,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
         {
             match interface.as_str() {
                 "wl_compositor" => {
-                    let c = registry.bind::<wl_compositor::WlCompositor, _, _>(
-                        name,
-                        version.min(4),
-                        qh,
-                        (),
-                    );
+                    assert!(version >= 6, "Hyprland parent requires wl_compositor v6");
+                    let c = registry.bind::<wl_compositor::WlCompositor, _, _>(name, 6, qh, ());
                     state.surface = Some(c.create_surface(qh, ()));
                     state.init(qh);
                 }
@@ -169,7 +165,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     state.paint(qh);
                 }
                 "xdg_wm_base" => {
-                    state.shell = Some(registry.bind(name, version.min(3), qh, ()));
+                    assert!(version >= 6, "Hyprland parent requires xdg-shell v6");
+                    state.shell = Some(registry.bind(name, 6, qh, ()));
                     state.init(qh);
                 }
                 "wp_viewporter" if state.viewported => {
@@ -190,7 +187,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     manager.get_fractional_scale(state.surface.as_ref().unwrap(), qh, ());
                 }
                 "wl_seat" => {
-                    registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(7), qh, ());
+                    assert!(version >= 9, "Hyprland parent requires wl_seat v9");
+                    registry.bind::<wl_seat::WlSeat, _, _>(name, 9, qh, ());
                 }
                 _ => {}
             }
@@ -733,3 +731,48 @@ impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, ()> for App {
 delegate_noop!(App: ignore wp_viewporter::WpViewporter);
 delegate_noop!(App: ignore wp_viewport::WpViewport);
 delegate_noop!(App: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
+
+#[test]
+fn nested_parent_delivers_configure_and_frame_callbacks_without_readback() {
+    let (peer, stream) = UnixStream::pair().unwrap();
+    let running = Arc::new(AtomicBool::new(true));
+    let server_running = running.clone();
+    let server = thread::spawn(move || {
+        let mut display = SingleWindow::new_display().unwrap();
+        let dh = display.handle();
+        let mut state = SingleWindow::new(&dh).unwrap();
+        state.insert_client(&dh, stream).unwrap();
+        while server_running.load(Ordering::Relaxed) {
+            display.dispatch_clients(&mut state).unwrap();
+            state.present_nested_parent();
+            display.flush_clients().unwrap();
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+    let (tx, events) = mpsc::channel();
+    let client = thread::spawn(move || {
+        let connection = Connection::from_socket(peer).unwrap();
+        let mut queue = connection.new_event_queue();
+        connection.display().get_registry(&queue.handle(), ());
+        let mut app = App {
+            events: Some(tx),
+            ..Default::default()
+        };
+        while queue.blocking_dispatch(&mut app).is_ok() {}
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut frame = false;
+    while Instant::now() < deadline {
+        if events
+            .recv_timeout(Duration::from_millis(100))
+            .is_ok_and(|event| event == "frame-done")
+        {
+            frame = true;
+            break;
+        }
+    }
+    running.store(false, Ordering::Relaxed);
+    server.join().unwrap();
+    client.join().unwrap();
+    assert!(frame, "private parent did not complete presentation");
+}

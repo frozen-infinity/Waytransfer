@@ -97,11 +97,21 @@ fn real_xterm_renders_and_executes_scoped_remote_input() {
         .unwrap()
         .0;
     assert!(scene.windows[&id].title.contains("X11"));
-    assert!(scene.windows[&id]
+    // XWayland can commit its blank mapped surface before xterm paints text.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !scene.windows[&id]
         .decoder
         .pixels
         .iter()
-        .any(|pixel| *pixel != scene.windows[&id].decoder.pixels[0]));
+        .any(|pixel| *pixel != scene.windows[&id].decoder.pixels[0])
+    {
+        assert!(
+            Instant::now() < deadline,
+            "X11 did not paint: {}",
+            session.log()
+        );
+        receive(&mut viewer, &mut scene, &session);
+    }
     let send = |viewer: &mut TcpStream, message| {
         write_message(
             viewer,

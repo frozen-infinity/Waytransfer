@@ -475,6 +475,7 @@ impl SingleWindow {
         None
     }
     fn focus_target(&self) -> Option<crate::keyboard_focus::KeyboardFocus> {
+        #[cfg(feature = "x11")]
         let window = self.window.as_ref()?;
         #[cfg(feature = "x11")]
         if let Some(surface) = window.x11_surface() {

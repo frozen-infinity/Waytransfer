@@ -48,10 +48,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     focused = Some(id);
                     println!("focus {id}");
                 }
-                Message::Focus { active: false } => {
-                    if focused == Some(id) {
-                        focused = None;
-                    }
+                Message::Focus { active: false } if focused == Some(id) => {
+                    focused = None;
                 }
                 Message::Keys { held } => {
                     if focused != Some(id) {

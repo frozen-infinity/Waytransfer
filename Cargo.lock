@@ -1202,6 +1202,7 @@ dependencies = [
 name = "waytransfer"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "ctrlc",
  "lz4_flex",
  "minifb",

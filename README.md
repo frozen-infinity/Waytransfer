@@ -162,3 +162,8 @@ welcome; report workload, dimensions, bytes/update and network conditions with
 bandwidth claims. MIT licensed; thanks to [Smithay](https://github.com/Smithay/smithay)
 for the Wayland building blocks and [Pixman](https://www.pixman.org/) for software
 composition.
+
+For a manual native input regression (focus, click, A press/release and switching
+away), see the `input_probe` instructions in [VALIDATION.md](VALIDATION.md).
+If no address argument is supplied, the viewer also accepts `WAYTRANSFER_ADDRESS`;
+the default remains `127.0.0.1:7878`.

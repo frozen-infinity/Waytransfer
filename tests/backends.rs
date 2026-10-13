@@ -251,8 +251,9 @@ fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
     let (main, dialog) = loop {
         assert!(
             Instant::now() < deadline,
-            "Java windows missing: {}",
-            session.log()
+            "Java windows missing: {}; scene: {}",
+            session.log(),
+            scene_summary(&scene)
         );
         let find = |title: &str, color: u32| {
             scene
@@ -304,6 +305,23 @@ fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
                 pressed: false,
             },
         );
+        // X11 transfers focus through an asynchronous WM_TAKE_FOCUS handshake.
+        // Wait for actual JTextField focus before injecting characters.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !session
+            .runtime
+            .path()
+            .join(format!("{marker}-focus"))
+            .exists()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "Java field focus for {marker} failed: {}; scene: {}",
+                session.log(),
+                scene_summary(&scene)
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
         send(&mut viewer, id, Message::Keys { held: vec![key] });
         send(&mut viewer, id, Message::Keys { held: vec![] });
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -358,4 +376,25 @@ fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
     }
     assert!(scene.windows.contains_key(&main));
     send(&mut viewer, main, Message::Close);
+}
+
+fn scene_summary(scene: &ClientScene) -> String {
+    scene
+        .windows
+        .iter()
+        .map(|(id, window)| {
+            let colors: std::collections::BTreeSet<_> =
+                window.decoder.pixels.iter().copied().collect();
+            format!(
+                "{id}: {:?} {:?} ready={} red={} blue={} colors={:?}",
+                window.title,
+                window.decoder.size,
+                window.ready,
+                colors.contains(&0xff0000),
+                colors.contains(&0xff),
+                colors.iter().take(12).collect::<Vec<_>>()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }

@@ -1,5 +1,23 @@
 //! Physical minifb keys to Linux evdev codes. The compositor currently uses a US layout.
-use minifb::Key;
+use minifb::{Key, Window};
+
+/// Query the actual key window on macOS. minifb 0.29's macOS `is_active`
+/// inverts its native bool, and its native notification tracker also treats
+/// resign-main as active. Inverting that API alone does not fix focus loss.
+pub fn window_focused(window: &Window) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn waytransfer_window_focused(window: *mut std::ffi::c_void) -> bool;
+        }
+        // SAFETY: minifb returns the live NSWindow pointer on macOS. The window
+        // owns it for this call; viewer polling and AppKit run on the main thread.
+        unsafe { waytransfer_window_focused(window.get_window_handle()) }
+    }
+    #[cfg(not(target_os = "macos"))]
+    window.is_active()
+}
+
 pub fn evdev(key: Key) -> Option<u16> {
     Some(match key {
         Key::Escape => 1,

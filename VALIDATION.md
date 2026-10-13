@@ -31,3 +31,30 @@ Popup/subsurface compatibility beyond the tested primary surface, GUI rendering
 on physical Mac/OMEN hardware, IDEs, GPU clients, wireless bandwidth and latency
 have not been validated. No production-compositor or broad application-compatibility
 claim follows from these tests.
+
+## macOS input focus correction
+
+The macOS implementation of minifb 0.29.0 returns `mfb_is_active(...) == 0`, while
+its native function returns a boolean active flag. Its notification tracker also
+sets the flag to true when the same window resigns main status. The viewer's input
+gate therefore cannot use that API, or merely invert it for reliable focus loss.
+
+Waytransfer now queries AppKit's live `NSApplication.isActive` and
+`NSWindow.isKeyWindow` state through a small macOS-only helper. Other platforms
+continue using minifb's focus API. No wire-protocol or compositor change is needed.
+
+Manual native regression on Apple Silicon macOS used the actual viewer executable
+and the `input_probe` receiver over TCP. Observed focus gain, pointer click, A key
+press/release and focus loss after switching to another application; probe passed.
+Unlike the earlier headless tests, this exercises the real Mac input gate.
+
+Repeat manually in two terminals:
+
+```sh
+cargo run --example input_probe
+cargo run --features viewer --bin viewer -- 127.0.0.1:17879
+```
+
+Click inside the viewer, press and release A, then switch to another application.
+The probe reports PASS when it receives all expected events; it times out after
+five minutes. This is a manual GUI check, not automatically run by headless CI.

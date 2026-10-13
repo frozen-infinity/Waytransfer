@@ -12,7 +12,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let addr = std::env::args()
         .skip(1)
         .find(|arg| arg != "--headless")
-        .unwrap_or_else(|| "127.0.0.1:7878".into());
+        .unwrap_or_else(|| {
+            std::env::var("WAYTRANSFER_ADDRESS").unwrap_or_else(|_| "127.0.0.1:7878".into())
+        });
     let mut stream = TcpStream::connect(addr)?;
     handshake(&mut stream)?;
     if headless {
@@ -72,7 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Err(mpsc::TryRecvError::Disconnected) => return Err("sender disconnected".into()),
             Err(mpsc::TryRecvError::Empty) => {}
         }
-        let focused = window.is_active();
+        let focused = viewer_input::window_focused(&window);
         if active != Some(focused) {
             pending.push_back(Message::Focus { active: focused });
             active = Some(focused);

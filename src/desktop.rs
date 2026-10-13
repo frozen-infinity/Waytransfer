@@ -146,7 +146,7 @@ impl DesktopState {
         self.capture
             .as_ref()
             .unwrap()
-            .capture_output(1, &output.output, qh, ());
+            .capture_output(0, &output.output, qh, ());
         self.pending = true;
     }
     fn copy_to_buffer(&mut self, frame: &frame::ZwlrScreencopyFrameV1) {

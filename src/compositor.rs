@@ -898,7 +898,6 @@ impl XdgShellHandler for SingleWindow {
             if self.selected.is_none() {
                 state.states.set(xdg_toplevel::State::Activated);
             }
-            state.states.set(xdg_toplevel::State::Maximized);
         });
         surface.send_configure();
         let window = Window::new_wayland_window(surface.clone());
@@ -925,6 +924,26 @@ impl XdgShellHandler for SingleWindow {
     }
     fn title_changed(&mut self, _: ToplevelSurface) {
         self.scene_dirty = true;
+    }
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|state| state.states.set(xdg_toplevel::State::Maximized));
+        surface.send_configure();
+    }
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|state| state.states.unset(xdg_toplevel::State::Maximized));
+        surface.send_configure();
+    }
+    fn fullscreen_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>,
+    ) {
+        surface.with_pending_state(|state| state.states.set(xdg_toplevel::State::Fullscreen));
+        surface.send_configure();
+    }
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|state| state.states.unset(xdg_toplevel::State::Fullscreen));
+        surface.send_configure();
     }
     fn parent_changed(&mut self, _: ToplevelSurface) {
         self.scene_dirty = true;

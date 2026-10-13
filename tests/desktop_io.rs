@@ -86,19 +86,24 @@ fn outgoing_backpressure_retries_and_preserves_requests() {
     let connection = Connection::from_socket(client).unwrap();
     let mut queue = connection.new_event_queue();
     let mut state = DesktopState::default();
-    // Exceed the socket's write capacity while the peer is not consuming requests.
-    for _ in 0..30_000 {
+    // Stop producing requests at the first blocked flush, rather than exhausting
+    // the backend's own bounded request buffer while the peer is paused.
+    let mut sent = 0;
+    loop {
         connection.display().get_registry(&queue.handle(), ());
+        sent += 1;
+        match connection.flush() {
+            Ok(()) => assert!(sent < 30_000, "socket never became backpressured"),
+            Err(WaylandError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("{error}"),
+        }
     }
-    assert!(
-        matches!(connection.flush(), Err(WaylandError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock)
-    );
     pump(&connection, &mut queue, &mut state, Duration::ZERO).unwrap();
     peer.set_nonblocking(true).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut received = 0;
     let mut buffer = [0u8; 8192];
-    while received < 30_000 * 12 {
+    while received < sent * 12 {
         loop {
             match peer.read(&mut buffer) {
                 Ok(0) => panic!("connection closed under write pressure"),
@@ -119,5 +124,5 @@ fn outgoing_backpressure_retries_and_preserves_requests() {
             "outgoing requests were lost or never flushed"
         );
     }
-    assert_eq!(received, 30_000 * 12);
+    assert_eq!(received, sent * 12);
 }

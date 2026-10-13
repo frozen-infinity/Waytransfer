@@ -480,6 +480,20 @@ delegate_noop!(DesktopState:ignore pointer_manager::ZwlrVirtualPointerManagerV1)
 delegate_noop!(DesktopState:ignore pointer::ZwlrVirtualPointerV1);
 delegate_noop!(DesktopState:ignore keyboard_manager::ZwpVirtualKeyboardManagerV1);
 delegate_noop!(DesktopState:ignore keyboard::ZwpVirtualKeyboardV1);
+/// Only EAGAIN is recoverable; protocol failures and disconnected sockets remain fatal.
+fn nonblocking<T>(
+    result: Result<T, wayland_client::backend::WaylandError>,
+) -> Result<Option<T>, wayland_client::backend::WaylandError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(wayland_client::backend::WaylandError::Io(error))
+            if error.kind() == io::ErrorKind::WouldBlock =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
 /// Pump Wayland while leaving network input/Ctrl-C responsive on an idle desktop.
 pub fn pump(
     connection: &Connection,
@@ -488,11 +502,11 @@ pub fn pump(
     timeout: Duration,
 ) -> Result<(), Box<dyn Error>> {
     queue.dispatch_pending(state)?;
-    connection.flush()?;
+    let write_pending = nonblocking(connection.flush())?.is_none();
     if let Some(guard) = queue.prepare_read() {
         let mut fd = libc::pollfd {
             fd: connection.as_fd().as_raw_fd(),
-            events: libc::POLLIN,
+            events: libc::POLLIN | if write_pending { libc::POLLOUT } else { 0 },
             revents: 0,
         };
         // SAFETY: one valid pollfd lives for this call; the borrowed connection fd
@@ -500,7 +514,21 @@ pub fn pump(
         let ready =
             unsafe { libc::poll(&mut fd, 1, timeout.as_millis().min(i32::MAX as u128) as i32) };
         if ready > 0 {
-            guard.read()?;
+            if fd.revents & libc::POLLNVAL != 0 {
+                return Err(
+                    io::Error::new(io::ErrorKind::BrokenPipe, "Invalid Wayland socket").into(),
+                );
+            }
+            if fd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+                // Readiness can contain only internal delete_id events or a partial
+                // message. Both can end in EAGAIN without any queue event dispatched.
+                nonblocking(guard.read())?;
+            } else {
+                drop(guard);
+            }
+            if write_pending && fd.revents & libc::POLLOUT != 0 {
+                nonblocking(connection.flush())?;
+            }
         } else if ready < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
             return Err(io::Error::last_os_error().into());
         }

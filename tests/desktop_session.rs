@@ -105,6 +105,8 @@ fn whole_desktop_shortcuts_typing_pointer_resize_and_reconnect() {
             .args(["--config", config.to_str().unwrap()])
             .current_dir(runtime.path())
             .env("XDG_RUNTIME_DIR", runtime.path())
+            .env("HOME", runtime.path())
+            .env("SHELL", "/bin/sh")
             .env("WLR_BACKENDS", "headless")
             .env("WLR_HEADLESS_OUTPUTS", "1")
             .env("WLR_RENDERER", "pixman")

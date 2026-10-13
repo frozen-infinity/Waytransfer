@@ -284,9 +284,26 @@ fn java_roundtrip(jbr: &std::ffi::OsStr, flags: &[&str], toolkit: &str) {
         )
         .unwrap();
     };
+    // A native viewer focuses the newly opened dialog first. Model that handoff
+    // before switching back to the parent; construction focus events are async.
+    send(&mut viewer, dialog, Message::Focus { active: true });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !session.runtime.path().join("dialog-key-focus").exists()
+        || session.runtime.path().join("main-key-focus").exists()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "Initial dialog focus failed: {}",
+            session.log()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    let mut previous = dialog;
     for (id, key, marker, letter) in [(main, 30, "main-key", "a"), (dialog, 48, "dialog-key", "b")]
     {
+        send(&mut viewer, previous, Message::Focus { active: false });
         send(&mut viewer, id, Message::Focus { active: true });
+        previous = id;
         send(
             &mut viewer,
             id,

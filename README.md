@@ -11,7 +11,7 @@ the Mac. The Mac displays the result in a native window and sends input back.
 ## Run a real application
 
 Use stable Rust (1.95 or newer), and build the same branch on both machines.
-**Wire protocol v3 requires rebuilding both sides; older v1/v2 viewers cannot
+**Wire protocol v4 requires rebuilding both sides; older v1/v2/v3 viewers cannot
 connect.** Stop the original demo sender before starting the compositor on its port.
 
 On Arch Linux / the OMEN, install build/runtime dependencies:
@@ -95,7 +95,7 @@ commits its resized buffer. Applications can impose their own size hints.
 Limits: positive dimensions, at most 2048 per side and 2,097,152 total pixels
 (1920×1080 fits). Larger Mac windows request a proportionally fitted framebuffer
 and display it stretched; this is a resolution budget, not HiDPI negotiation.
-Frames and reset allocations are bounded. The JSON packet ceiling is 40 MiB to
+Frames and reset allocations are bounded. The binary packet ceiling is 12 MiB to
 accommodate incompressible full frames within those limits; the input channel
 remains capped at 4 KiB per packet. Normal compressed UI updates are far smaller.
 Large/high-entropy redraws still cost bandwidth; use a smaller window on slow Wi-Fi.
@@ -127,7 +127,8 @@ does not take over the OMEN's existing desktop.
 Variable-size frames are split into 32×32 tiles, including partial edge tiles. Exact
 comparison skips unchanged tiles; changed tiles use lossless LZ4 compression.
 Idle content sends zero frame bytes. There is no persistent tile deduplication yet.
-JSON length-prefixed messages are readable but add byte-array overhead.
+The compact, length-prefixed [binary protocol](PROTOCOL.md) sends compressed
+tile bytes directly, avoiding the decimal arrays used by earlier JSON versions.
 
 The compositor renders on surface commits at up to 30 ticks/second. A network
 worker holds the latest raw framebuffer snapshot and encodes only the snapshots
@@ -144,6 +145,29 @@ update changes the client framebuffer. Sender logs actual message bytes versus
 the current raw frame size (1,024,000 bytes at the default 640×400). RTT still limits
 input response; these mechanisms reduce
 bandwidth, not the network's round-trip delay.
+
+## Reproduce bandwidth measurements
+
+```sh
+cargo run --release --example bandwidth
+```
+
+This compares identical LZ4 tile blocks wrapped in the exact compact v3 JSON
+layout and in v4 binary packets. Includes the four-byte packet length; excludes
+TCP/IP/SSH overhead. Measured on Apple Silicon with Rust 1.95:
+
+| Synthetic workload | v3 JSON bytes | v4 binary bytes | Reduction |
+| --- | ---: | ---: | ---: |
+| 640×400 initial frame | 41,808 | 12,247 | 70.7% |
+| 640×400 one-pixel pointer movement | 2,248 | 795 | 64.6% |
+| 1920×1080 initial frame | 283,138 | 80,363 | 71.6% |
+| 1920×1080 deterministic noise | 29,809,231 | 8,343,080 | 72.0% |
+
+Idle content remains zero frame bytes. These isolate encoding overhead; they are
+not measurements of real IDE workloads, wireless latency or network throughput.
+Noise remains slightly larger than raw pixels with LZ4, so this format cannot make
+arbitrary high-entropy content cheap to send. The test suite requires a >50%
+reduction for the synthetic initial/small-delta cases and verifies exact pixels.
 
 ## Original square demo
 

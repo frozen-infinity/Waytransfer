@@ -1,16 +1,14 @@
 //! Versioned, bounded transport and lossless dirty-tile reconstruction.
-use serde::{Deserialize, Serialize};
-use std::io::{self, Read, Write};
-pub const VERSION: u16 = 3;
+use std::io;
+pub const VERSION: u16 = 4;
 pub const WIDTH: usize = 640;
 pub const HEIGHT: usize = 400;
 pub const TILE: usize = 32;
-// JSON byte arrays need up to four bytes per compressed byte. This ceiling
-// accommodates a bounded full-HD keyframe, including incompressible content.
-pub const MAX_PACKET: usize = 40 * 1024 * 1024;
+// Bounded binary framing covers the maximum framebuffer plus LZ4 overhead.
+pub const MAX_PACKET: usize = 12 * 1024 * 1024;
 pub const MAX_DIMENSION: usize = 2048;
 pub const MAX_PIXELS: usize = 2_097_152;
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dimensions {
     pub width: u16,
     pub height: u16,
@@ -74,7 +72,7 @@ impl std::str::FromStr for Dimensions {
         )
     }
 }
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Message {
     Hello {
         version: u16,
@@ -109,36 +107,14 @@ pub enum Message {
         active: bool,
     },
 }
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Tile {
     pub x: usize,
     pub y: usize,
     pub data: Vec<u8>,
 }
-pub fn write_message(mut w: impl Write, message: &Message) -> io::Result<usize> {
-    let data = serde_json::to_vec(message)?;
-    if data.len() > MAX_PACKET {
-        return Err(invalid("packet too large"));
-    }
-    w.write_all(&(data.len() as u32).to_be_bytes())?;
-    w.write_all(&data)?;
-    Ok(data.len() + 4)
-}
-pub fn read_message(r: impl Read) -> io::Result<Message> {
-    read_message_limit(r, MAX_PACKET)
-}
-/// Apply a smaller limit for control/input channels before allocating the body.
-pub fn read_message_limit(mut r: impl Read, limit: usize) -> io::Result<Message> {
-    let mut header = [0; 4];
-    r.read_exact(&mut header)?;
-    let len = u32::from_be_bytes(header) as usize;
-    if len == 0 || len > limit.min(MAX_PACKET) {
-        return Err(invalid("invalid packet length"));
-    }
-    let mut data = vec![0; len];
-    r.read_exact(&mut data)?;
-    serde_json::from_slice(&data).map_err(Into::into)
-}
+mod wire;
+pub use wire::{read_message, read_message_limit, write_message};
 pub fn handshake(stream: &mut std::net::TcpStream) -> io::Result<()> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;

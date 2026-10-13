@@ -48,3 +48,17 @@ fn reconnect_gets_complete_latest_frame_and_input_round_trip() {
     drop(server);
     assert!(read_message(&mut reconnected).is_err());
 }
+
+#[test]
+fn oversized_input_is_rejected_before_allocation() {
+    use std::io::Write;
+    let server = RemoteServer::bind("127.0.0.1:0").unwrap();
+    let mut stream = TcpStream::connect(server.local_addr()).unwrap();
+    handshake(&mut stream).unwrap();
+    // A length prefix alone is enough to reject it: no need to send/allocate a body.
+    stream.write_all(&4097u32.to_be_bytes()).unwrap();
+    assert!(matches!(
+        server.events.recv_timeout(Duration::from_secs(2)).unwrap(),
+        RemoteEvent::Disconnected
+    ));
+}

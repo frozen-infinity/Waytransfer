@@ -1,23 +1,35 @@
 # Roadmap
 
-1. **Transport prototype (current):** synthetic single surface, dirty tiles, LZ4,
-   retained client framebuffer, pointer round trip, Linux/macOS CI.
-2. **Measure:** code-editor-like workloads, bytes/update and input-to-display
-   latency under constrained bandwidth/RTT; binary wire format, coalescing and
-   explicit backpressure. Add decoder fuzzing, limits on sessions and timeouts.
-3. **Real Linux pixels:** choose and implement a Wayland capture backend with
-   explicit user consent; negotiate surface size, resize/reset and cursor metadata.
-   Capture is distinct from hosting applications in a compositor.
-4. **Application windows:** evaluate a nested compositor (e.g. Smithay), surface
-   lifecycle, damage, subsurfaces, input seats, keyboard layouts and clipboard.
-   Wayland clients generally submit rendered buffers, not font/vector draw commands.
-   Forwarding Wayland alone therefore does not make the Mac render application UI.
-5. **Bandwidth:** bounded content-addressed tile cache, scroll/copy detection,
-   adaptive update rates and per-surface prioritization, benchmarks before claims.
-6. **macOS integration:** native multiwindow shell, local decorations, HiDPI,
-   accessibility and a measured GPU presentation path. Explore semantic/vector
-   rendering only for applications/toolkits that expose suitable operations.
-7. **Harden:** authenticated encrypted transport, reconnect/resync, resource budgets,
-   multi-client policy, packaging, compatibility matrix and release process.
+Delivered:
 
-No real Wayland compositor support is delivered or implied by milestone 1.
+- Synthetic remote-display transport, dirty tiles and lossless LZ4.
+- Experimental headless Linux compositor: one xdg-shell application window,
+  wl_shm software buffers, fixed 640×400 virtual output and surface composition.
+- Native Mac viewer with pointer/buttons/scroll and basic US physical keyboard.
+- Background transport, bounded queues, raw-frame coalescing and full reconnect.
+- Shared transport tests, independent Wayland-client integration test and a real
+  weston-terminal smoke test in Linux CI.
+
+Next:
+
+1. **One-window usability:** configurable/negotiated dimensions, resize/reset,
+   window title and lifecycle metadata, HiDPI, remote cursor shapes, keyboard layout
+   selection and IME. Expand popup/subsurface tests and test common GTK/Qt apps.
+2. **GPU and legacy applications:** EGL/DMA-BUF capture/rendering path and XWayland
+   support. Benchmark software and GPU paths with terminals and IDEs before claims.
+3. **Bandwidth:** binary wire format, scroll/copy detection, bounded tile cache,
+   configurable refresh budget, realistic editor workloads, input-to-display latency
+   under constrained bandwidth and RTT. Fuzz decoders and bound Wayland resources.
+4. **Multiwindow:** native Mac windows per Linux toplevel, transient dialogs,
+   independent framebuffers, focus/stacking and clipboard. Keep dragging and Mac
+   window decorations local. Do this after single-window compatibility is reliable.
+5. **Rendering on Mac:** measured GPU presentation and optional semantic/vector
+   operations for cooperating applications/toolkits. Ordinary Wayland clients submit
+   rendered buffers; Wayland forwarding alone cannot expose their drawing commands.
+6. **Harden/release:** authenticated encrypted transport, session authorization,
+   client/resource limits, reconnect lifecycle, process supervision, packaging,
+   compatibility matrix and release artifacts.
+
+Current code hosts applications in a separate session. It does not capture the
+existing desktop, support a whole desktop environment, or replace the Linux display
+manager. Multiwindow and accelerated-client support are not delivered yet.

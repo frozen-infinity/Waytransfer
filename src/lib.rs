@@ -54,11 +54,15 @@ pub fn write_message(mut w: impl Write, message: &Message) -> io::Result<usize> 
     w.write_all(&data)?;
     Ok(data.len() + 4)
 }
-pub fn read_message(mut r: impl Read) -> io::Result<Message> {
+pub fn read_message(r: impl Read) -> io::Result<Message> {
+    read_message_limit(r, MAX_PACKET)
+}
+/// Apply a smaller limit for control/input channels before allocating the body.
+pub fn read_message_limit(mut r: impl Read, limit: usize) -> io::Result<Message> {
     let mut header = [0; 4];
     r.read_exact(&mut header)?;
     let len = u32::from_be_bytes(header) as usize;
-    if len == 0 || len > MAX_PACKET {
+    if len == 0 || len > limit.min(MAX_PACKET) {
         return Err(invalid("invalid packet length"));
     }
     let mut data = vec![0; len];

@@ -1,5 +1,5 @@
 //! A single viewer session; only raw snapshots may be coalesced, never encoded deltas.
-use crate::{handshake, read_message, write_message, Encoder, Message, HEIGHT, WIDTH};
+use crate::{handshake, read_message_limit, write_message, Encoder, Message, HEIGHT, WIDTH};
 use std::{
     io,
     net::{Shutdown, TcpListener, TcpStream},
@@ -66,7 +66,23 @@ impl RemoteServer {
                     let reader_tx = tx.clone();
                     let reader_shared = worker_shared.clone();
                     let input = thread::spawn(move || {
-                        while let Ok(message) = read_message(&mut reader) {
+                        while let Ok(message) = read_message_limit(&mut reader, 4096) {
+                            let valid = match &message {
+                                Message::Pointer { x, y, .. } => {
+                                    (*x as usize) < WIDTH && (*y as usize) < HEIGHT
+                                }
+                                Message::Keys { held } => {
+                                    held.len() <= 128
+                                        && held.iter().all(|key| (1..=127).contains(key))
+                                }
+                                Message::Buttons { .. }
+                                | Message::Scroll { .. }
+                                | Message::Focus { .. } => true,
+                                _ => false,
+                            };
+                            if !valid {
+                                break;
+                            }
                             if reader_tx.send(RemoteEvent::Input(message)).is_err() {
                                 break;
                             }

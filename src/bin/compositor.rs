@@ -186,6 +186,7 @@ fn crate_start_x11(
         'static,
         waytransfer::compositor::SingleWindow,
     >,
+    accelerated: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     waytransfer::x11::start(display, event_loop, accelerated)
 }

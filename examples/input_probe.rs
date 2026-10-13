@@ -16,6 +16,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Connect viewer to {}; click, press/release A, then switch away",
         server.local_addr()
     );
+    let resize_only = std::env::args().any(|arg| arg == "--resize");
+    let mut size = Dimensions::default();
+    let mut resized = false;
     let (mut focus, mut click, mut press, mut release, mut blur) =
         (false, false, false, false, false);
     let deadline = Instant::now() + Duration::from_secs(300);
@@ -24,6 +27,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             server.events.recv_timeout(Duration::from_millis(100))
         {
             match message {
+                Message::Resize { size: requested } => {
+                    size = requested;
+                    resized = true;
+                    server.publish_sized(size, demo_frame_sized(size, 320, 200, false)?)?;
+                    println!("resize {}x{}", size.width, size.height);
+                }
                 Message::Focus { active: true } => {
                     focus = true;
                     println!("focus gained");
@@ -45,12 +54,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                         click = true;
                         println!("pointer click");
                     }
-                    server.publish(demo_frame(x as usize, y as usize, pressed))?;
+                    server.publish_sized(
+                        size,
+                        demo_frame_sized(size, x as usize, y as usize, pressed)?,
+                    )?;
                 }
                 _ => {}
             }
         }
-        if focus && click && press && release && blur {
+        if resize_only && resized && press && release {
+            println!("PASS: native resize and keyboard input after resize");
+            return Ok(());
+        }
+        if !resize_only && focus && click && press && release && blur {
             println!("PASS: native viewer forwarded focus, click, A press/release and focus loss");
             return Ok(());
         }

@@ -36,6 +36,8 @@ fn weston_terminal_renders_and_executes_remote_keyboard_input() {
             &addr.to_string(),
             "--socket",
             "waytransfer-test",
+            "--size",
+            "803x509",
             "--",
             "weston-terminal",
         ])

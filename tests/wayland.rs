@@ -429,7 +429,14 @@ fn real_wayland_shm_pixels_pointer_keyboard_focus_and_disconnect() {
     }
     let size = Dimensions::new(801, 503).unwrap();
     write_message(&mut reconnected, &Message::Resize { size }).unwrap();
-    while after.size != size {
+    let expected = App {
+        size,
+        key_seen: true,
+        click: Some((60, 80)),
+        ..Default::default()
+    }
+    .pixels();
+    while after.size != size || after.pixels != expected {
         after
             .apply(read_message(&mut reconnected).unwrap())
             .unwrap();

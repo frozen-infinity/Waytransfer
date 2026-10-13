@@ -290,18 +290,28 @@ impl Decoder {
 }
 /// Synthetic UI: static rows plus a pointer-controlled colored square.
 pub fn demo_frame(x: usize, y: usize, pressed: bool) -> Vec<u32> {
-    let mut pixels = vec![0x18202c; WIDTH * HEIGHT];
-    for row in 0..HEIGHT {
-        for col in 0..WIDTH {
+    demo_frame_sized(Dimensions::default(), x, y, pressed).expect("default dimensions are valid")
+}
+pub fn demo_frame_sized(
+    size: Dimensions,
+    x: usize,
+    y: usize,
+    pressed: bool,
+) -> io::Result<Vec<u32>> {
+    let size = size.validate()?;
+    let (width, height) = (size.width as usize, size.height as usize);
+    let mut pixels = vec![0x18202c; size.pixel_count()];
+    for row in 0..height {
+        for col in 0..width {
             if row % 24 < 3 && col > 32 && col < 480 {
-                pixels[row * WIDTH + col] = 0x697c91;
+                pixels[row * width + col] = 0x697c91;
             }
             if col.abs_diff(x) < 12 && row.abs_diff(y) < 12 {
-                pixels[row * WIDTH + col] = if pressed { 0xffa040 } else { 0x40d0a0 };
+                pixels[row * width + col] = if pressed { 0xffa040 } else { 0x40d0a0 };
             }
         }
     }
-    pixels
+    Ok(pixels)
 }
 
 #[cfg(all(target_os = "linux", feature = "compositor"))]

@@ -332,5 +332,7 @@ pub fn window_title(title: &str) -> String {
 pub mod render_engine;
 
 pub mod client_scene;
+#[cfg(all(target_os = "linux", feature = "compositor"))]
+pub mod keyboard_focus;
 #[cfg(all(target_os = "linux", feature = "x11"))]
 pub mod x11;

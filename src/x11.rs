@@ -17,13 +17,21 @@ use std::{error::Error, process::Stdio};
 pub fn start(
     display: &smithay::reexports::wayland_server::DisplayHandle,
     event_loop: &EventLoop<'static, SingleWindow>,
+    accelerated: bool,
 ) -> Result<(), Box<dyn Error>> {
     let handle = event_loop.handle();
     let wm_handle = handle.clone();
+    let mut envs = Vec::new();
+    if !accelerated {
+        envs.push(("XWAYLAND_NO_GLAMOR".to_string(), "1".to_string()));
+    }
+    if let Ok(value) = std::env::var("LIBGL_ALWAYS_SOFTWARE") {
+        envs.push(("LIBGL_ALWAYS_SOFTWARE".to_string(), value));
+    }
     let (xwayland, client): (_, Client) = XWayland::spawn(
         display,
         None,
-        std::iter::empty::<(String, String)>(),
+        envs,
         false,
         Stdio::null(),
         Stdio::inherit(),

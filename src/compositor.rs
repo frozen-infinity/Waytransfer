@@ -407,6 +407,17 @@ impl SingleWindow {
                 #[cfg(feature = "x11")]
                 if let Some(surface) = entry.window.x11_surface() {
                     title = surface.title();
+                    parent = surface.is_transient_for().and_then(|parent| {
+                        self.windows
+                            .iter()
+                            .find(|(_, entry)| {
+                                entry
+                                    .window
+                                    .x11_surface()
+                                    .is_some_and(|surface| surface.window_id() == parent)
+                            })
+                            .map(|(id, _)| *id)
+                    });
                 }
                 snapshots.push(WindowSnapshot {
                     id,
@@ -451,16 +462,34 @@ impl SingleWindow {
         Ok(())
     }
     fn root(&self) -> Option<WlSurface> {
-        self.window
-            .as_ref()?
-            .toplevel()
-            .map(|s| s.wl_surface().clone())
+        let window = self.window.as_ref()?;
+        if let Some(top) = window.toplevel() {
+            return Some(top.wl_surface().clone());
+        }
+        #[cfg(feature = "x11")]
+        if let Some(surface) = window.x11_surface() {
+            return surface.wl_surface();
+        }
+        None
+    }
+    fn focus_target(&self) -> Option<crate::keyboard_focus::KeyboardFocus> {
+        let window = self.window.as_ref()?;
+        #[cfg(feature = "x11")]
+        if let Some(surface) = window.x11_surface() {
+            surface.wl_surface()?;
+            return Some(crate::keyboard_focus::KeyboardFocus::X11(surface.clone()));
+        }
+        self.root().map(Into::into)
     }
     fn keyboard_focus(&mut self) {
         if self.seat.get_keyboard().unwrap().is_grabbed() {
             return;
         }
-        let surface = if self.active { self.root() } else { None };
+        let surface = if self.active {
+            self.focus_target()
+        } else {
+            None
+        };
         let keyboard = self.seat.get_keyboard().unwrap();
         if keyboard.current_focus() != surface {
             keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
@@ -799,14 +828,25 @@ impl ShmHandler for SingleWindow {
 }
 impl OutputHandler for SingleWindow {}
 impl SeatHandler for SingleWindow {
-    type KeyboardFocus = WlSurface;
+    type KeyboardFocus = crate::keyboard_focus::KeyboardFocus;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seats
     }
-    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
-        set_data_device_focus(&self.display, seat, focused.and_then(|s| s.client()));
+    fn focus_changed(
+        &mut self,
+        seat: &Seat<Self>,
+        focused: Option<&crate::keyboard_focus::KeyboardFocus>,
+    ) {
+        set_data_device_focus(
+            &self.display,
+            seat,
+            focused.and_then(|s| {
+                use smithay::wayland::seat::WaylandFocus;
+                s.wl_surface().and_then(|surface| surface.client())
+            }),
+        );
     }
     fn cursor_image(&mut self, _: &Seat<Self>, _: CursorImageStatus) {}
 }
@@ -886,7 +926,10 @@ impl XdgShellHandler for SingleWindow {
     fn grab(&mut self, surface: PopupSurface, _: wl_seat::WlSeat, serial: Serial) {
         if let Some(root) = self.root() {
             let seat = self.seat.clone();
-            if let Ok(grab) = self.popups.grab_popup(root, surface.into(), &seat, serial) {
+            if let Ok(grab) = self
+                .popups
+                .grab_popup(root.into(), surface.into(), &seat, serial)
+            {
                 seat.get_keyboard()
                     .unwrap()
                     .set_grab(self, PopupKeyboardGrab::new(&grab), serial);

@@ -93,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop = smithay::reexports::calloop::EventLoop::try_new()?;
     if use_x11 {
         #[cfg(feature = "x11")]
-        crate_start_x11(&dh, &event_loop)?;
+        crate_start_x11(&dh, &event_loop, accelerated)?;
         #[cfg(not(feature = "x11"))]
         return Err("Build with --features compositor,x11 for --x11".into());
     }
@@ -187,5 +187,5 @@ fn crate_start_x11(
         waytransfer::compositor::SingleWindow,
     >,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    waytransfer::x11::start(display, event_loop)
+    waytransfer::x11::start(display, event_loop, accelerated)
 }

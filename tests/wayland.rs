@@ -510,6 +510,7 @@ fn multiwindow_roundtrip(gpu: bool) {
     }
     let running = Arc::new(AtomicBool::new(true));
     let server_running = running.clone();
+    let (ready_tx, ready) = mpsc::channel();
     let server = thread::spawn(move || {
         let mut display = SingleWindow::new_display().unwrap();
         let dh = display.handle();
@@ -531,6 +532,7 @@ fn multiwindow_roundtrip(gpu: bool) {
         } else {
             RenderEngine::software().unwrap()
         };
+        ready_tx.send(()).unwrap();
         while server_running.load(Ordering::Relaxed) {
             display.dispatch_clients(&mut state).unwrap();
             for _ in 0..128 {
@@ -554,6 +556,9 @@ fn multiwindow_roundtrip(gpu: bool) {
         }
     }
     let guard = Stop(running);
+    ready
+        .recv_timeout(Duration::from_secs(30))
+        .expect("renderer startup failed");
     let mut clients = Vec::new();
     let mut receivers = Vec::new();
     for (index, peer) in peers.into_iter().enumerate() {
@@ -576,7 +581,7 @@ fn multiwindow_roundtrip(gpu: bool) {
     let mut viewer = TcpStream::connect(addr).unwrap();
     handshake(&mut viewer).unwrap();
     viewer
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(15)))
         .unwrap();
     let mut scene = ClientScene::default();
     while scene.windows.len() != 2 || scene.windows.values().any(|window| !window.ready) {
